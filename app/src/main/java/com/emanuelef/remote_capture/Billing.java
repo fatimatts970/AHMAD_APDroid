@@ -107,15 +107,17 @@ public class Billing {
         return new Billing(ctx);
     }
 
+    /* AHMAD_APDroid: this is a free fork build. All features that are already implemented
+     * in the upstream open-source code are unlocked here in a single place, instead of
+     * duplicating gating logic across every call site (SettingsActivity, CaptureCtrl,
+     * ConnectionsFragment, Prefs, AboutActivity, etc. all funnel through isPurchased()/
+     * isAvailable()). No billing library, unlock token flow, or purchase UI is added. */
     public boolean isAvailable(String sku) {
-        return isPurchased(sku);
+        return true;
     }
 
     public boolean isPurchased(String sku) {
-        if(mPeerSkus.contains(sku))
-            return true;
-
-        return hasValidLicense();
+        return true;
     }
 
     public boolean hasValidLicense() {
