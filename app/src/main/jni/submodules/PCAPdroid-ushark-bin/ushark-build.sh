@@ -1,0 +1,801 @@
+#!/bin/bash
+#
+# This file is part of PCAPdroid.
+#
+# PCAPdroid is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# PCAPdroid is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with PCAPdroid.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Copyright 2024-26 - Emanuele Faranda
+#
+
+set -e
+
+MIN_SDK=21
+NDK_VERSION="28.2.13676358"
+TOP_DIR=`readlink -f .`
+
+LIBICONV_VERSION="1.19"
+LIBICONV_SHA256="88dd96a8c0464eca144fc791ae60cd31cd8ee78321e67397e25fc095c4a19aa6"
+GLIB2_VERSION="2.88.1"
+GLIB2_SHA256="51ab804c56f6eab3e5045c774d1290ac5e4c923d4f9a3d8e33123bee45c1840e"
+LIBGPGERROR_VERSION="1.61"
+LIBGPGERROR_SHA256="7a85413f2bc354f4f8aa832b718af122e48965e9e0eb9012ee659c13c6385c93"
+LIBGCRYPT_VERSION="1.12.2"
+LIBGCRYPT_SHA256="7ce33c2492221a0436f96a8500215e9f3e3dcb5fd26a757cd415e7a843babd5e"
+NGHTTP2_VERSION="1.69.0"
+NGHTTP2_SHA256="3f185f5b1c3e77885eb9cf3f2c4da4b1a9f73a24bf5957b829183ad137f82dc8"
+LIBFFI_VERSION="3.6.0"
+LIBFFI_SHA256="31ff1fe32deaebfbb388727f32677bb254bf2a41382c51464c0b1837c9ee9828"
+WIRESHARK_TAG="v4.7.1-ushark"
+USHARK_TAG="pcapdroid-v4.7.1"
+
+function usage {
+  echo "Usage: `basename $0` [args]"
+  echo "Supported ABIs: armeabi-v7a arm64-v8a x86 x86_64"
+  echo
+  echo "By default, builds all Android ABIs + host x86_64"
+  echo
+  echo "Args:"
+  echo "  -a, --abi abi           only build for the specified Android ABI"
+  echo "  -b, --build lib         only build the specified lib"
+  echo "  -H, --host              only build for host (x86_64, uses system compiler)"
+  echo "  -j, --jobs n            specify the number of jobs for the builds"
+  echo "  -t, --type type         set the build type: debug/release"
+  echo "  -u, --ushark path       use local ushark sources (overrides USHARK_TAG)"
+  echo "  -v, --verbose           show the full build output"
+  echo "  clean                   clean the project"
+}
+
+# download_and_verify name "url" "optional sha256"
+function download_and_verify {
+  local fname="${2##*/}"
+
+  if [[ ! -f "modules/$fname" ]]; then
+    echo "Downloading $fname ..."
+    wget -q --show-progress "$2" -O "modules/$fname"
+  fi
+
+  if [[ ! -z "$3" ]]; then
+    echo "$3 modules/$fname" | sha256sum --check
+
+    if [[ $? -ne 0 ]]; then
+      echo "Checksum verification failed" >&2
+      exit 1
+    fi
+  else
+    echo "[WARNING] Checksum verification skipped for modules/$fname"
+    echo -n "SHA256: "
+    sha256sum modules/$fname | awk '{ print $1 }'
+  fi
+
+  rm -rf "modules/$1"
+  mkdir -p "modules/$1"
+  tar -xf "modules/$fname" -C "modules/$1" --strip-components=1
+}
+
+# download_and_verify name "url" "tag/branch"
+function clone_and_checkout {
+  if [[ ! -d "modules/$1/.git" ]]; then
+    rm -rf "modules/$1"
+    git clone "$2" "modules/$1"
+  fi
+
+  cd "modules/$1"
+  git fetch
+  git reset --hard "$3"
+  cd "$TOP_DIR"
+}
+
+function git_module_has_local_changes {
+  local mod="$1"
+  [ -d "$mod/.git" ] || return 1
+
+  # uncommitted (tracked) or staged changes
+  if ! git -C "$mod" diff --quiet HEAD 2>/dev/null; then
+    echo "  $mod: uncommitted changes in working tree" >&2
+    return 0
+  fi
+
+  # untracked, non-ignored files
+  if [ -n "$(git -C "$mod" ls-files --others --exclude-standard 2>/dev/null)" ]; then
+    echo "  $mod: untracked files present" >&2
+    return 0
+  fi
+
+  # commits on HEAD not present on any origin branch (local-only commits/branch)
+  local local_only
+  local_only=$(git -C "$mod" rev-list --count HEAD --not --remotes=origin 2>/dev/null)
+  if [ "${local_only:-0}" -gt 0 ]; then
+    echo "  $mod: $local_only commit(s) not present on origin" >&2
+    return 0
+  fi
+
+  return 1
+}
+
+function pull_dependencies {
+  mkdir -p modules
+  download_and_verify libiconv "https://ftp.gnu.org/pub/gnu/libiconv/libiconv-$LIBICONV_VERSION.tar.gz" $LIBICONV_SHA256
+  download_and_verify glib2 "https://download.gnome.org/sources/glib/${GLIB2_VERSION%.*}/glib-$GLIB2_VERSION.tar.xz" $GLIB2_SHA256
+  download_and_verify libgpg-error "https://www.gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-$LIBGPGERROR_VERSION.tar.bz2" $LIBGPGERROR_SHA256
+  download_and_verify libgcrypt "https://gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-$LIBGCRYPT_VERSION.tar.bz2" $LIBGCRYPT_SHA256
+  download_and_verify nghttp2 "https://github.com/nghttp2/nghttp2/releases/download/v$NGHTTP2_VERSION/nghttp2-$NGHTTP2_VERSION.tar.bz2" $NGHTTP2_SHA256
+  download_and_verify libffi "https://github.com/libffi/libffi/releases/download/v$LIBFFI_VERSION/libffi-$LIBFFI_VERSION.tar.gz" $LIBFFI_SHA256
+
+  clone_and_checkout wireshark "https://github.com/emanuele-f/wireshark" $WIRESHARK_TAG
+
+  if [ -z "$LOCAL_USHARK" ]; then
+    clone_and_checkout ushark "https://github.com/emanuele-f/ushark" $USHARK_TAG
+  fi
+}
+
+function restore_glib2_meson_build {
+  sed -i "s|libiconv = declare_dependency(.*|libiconv = dependency('iconv')|g" "$GLIB2_SRC/meson.build" 2>/dev/null
+}
+
+TARGET_ABI=
+TARGET_LIB=
+DO_CLEAN=
+USHARK_SRC=
+LOCAL_USHARK=
+BUILD_TYPE=release
+JOBS=`nproc --ignore 1`
+HOST_BUILD_MODE=
+VERBOSE=
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -a|--abi)
+      TARGET_ABI="$2"
+      shift
+      shift
+      ;;
+    -b|--build)
+      TARGET_LIB="$2"
+      shift
+      shift
+      ;;
+    -t|--type)
+      BUILD_TYPE="$2"
+      shift
+      shift
+      ;;
+    -j|--jobs)
+      JOBS="$2"
+      shift
+      shift
+      ;;
+    -u|--ushark)
+      USHARK_SRC="$2"
+      LOCAL_USHARK=1
+      shift
+      shift
+      ;;
+    -H|--host)
+      HOST_BUILD_MODE=1
+      shift
+      ;;
+    -v|--verbose)
+      VERBOSE=1
+      shift
+      ;;
+    clean)
+      DO_CLEAN=1
+      shift
+      ;;
+    *)
+      echo "Invalid argument: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+MAKE="make -j$JOBS"
+
+if [ ! -z $DO_CLEAN ]; then
+  rm -rf dist build
+
+  PRESERVE_MODULES=
+  for mod in modules/wireshark modules/ushark; do
+    if git_module_has_local_changes "$mod"; then
+      PRESERVE_MODULES=1
+    fi
+  done
+
+  if [ -n "$PRESERVE_MODULES" ]; then
+    echo "Local changes detected; keeping modules folder"
+  else
+    rm -rf modules
+  fi
+
+  restore_glib2_meson_build
+  exit 0
+fi
+
+if [ -z "$HOST_BUILD_MODE" ]; then
+  if [ -z "$ANDROID_HOME" ]; then
+    echo "The ANDROID_HOME environment variable is not set" >&2
+    exit 1
+  fi
+
+  ANDROID_NDK_ROOT="$ANDROID_HOME/ndk/$NDK_VERSION"
+  ANDROID_CMAKE_TOOLCHAIN="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake"
+  ANDROID_TOOLCHAIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64"
+
+  if [ ! -d "$ANDROID_NDK_ROOT" ]; then
+    echo "The Android NDK root folder is missing: $ANDROID_NDK_ROOT" >&2
+    exit 1
+  fi
+
+  if [ ! -f "$ANDROID_CMAKE_TOOLCHAIN" ]; then
+    echo "The Android NDK cross compilation toolchain is missing: $ANDROID_CMAKE_TOOLCHAIN" >&2
+    exit 1
+  fi
+
+  export PATH="$ANDROID_TOOLCHAIN/bin:$PATH"
+fi
+
+pull_dependencies
+
+ICONV_SRC="$TOP_DIR/modules/libiconv"
+GLIB2_SRC="$TOP_DIR/modules/glib2"
+LIBFFI_SRC="$TOP_DIR/modules/libffi"
+GPGERROR_SRC="$TOP_DIR/modules/libgpg-error"
+GCRYPT_SRC="$TOP_DIR/modules/libgcrypt"
+NGHTTP2_SRC="$TOP_DIR/modules/nghttp2"
+WIRESHARK_SRC="$TOP_DIR/modules/wireshark"
+
+if [ -z "$LOCAL_USHARK" ]; then
+    USHARK_SRC="$TOP_DIR/modules/ushark"
+fi
+
+if [ -z "$TARGET_ABI" ] && [ -z "$HOST_BUILD_MODE" ]; then
+  rm -rf dist build
+fi
+mkdir -p dist build
+
+MESON_BUILD_TYPE=
+BUILD_TYPE_CFLAGS=
+if [[ "$BUILD_TYPE" == release ]]; then
+  MESON_BUILD_TYPE=release
+  BUILD_TYPE=Release
+  BUILD_TYPE_CFLAGS="-g -O2"
+elif [[ "$BUILD_TYPE" == debug ]]; then
+  MESON_BUILD_TYPE=debug
+  BUILD_TYPE=Debug
+  BUILD_TYPE_CFLAGS="-g -O0"
+else
+  echo "Bad build type: $BUILD_TYPE" >&2
+  usage
+  exit 1
+fi
+
+ABI=
+HOST=
+CPU=
+BUILD=
+BUILD_ROOT=
+INSTALL_DIR=
+CUR_BUILD=
+CUR_LOGFILE=
+GPGERR_LOCKOBJ=
+GPGERR_LOCKOBJ_DEST=
+
+function select_abi {
+  ABI="$1"
+  local ABI_CFLAGS=
+  local ABI_LDFLAGS=
+  local TOOLS_PREFIX=
+
+  case "$ABI" in
+    armeabi-v7a)
+      HOST=arm-linux-androideabi
+      CPU=arm
+      GPGERR_LOCKOBJ=lock-obj-pub.arm-unknown-linux-androideabi.h
+      GPGERR_LOCKOBJ_DEST=$GPGERR_LOCKOBJ
+      TOOLS_PREFIX="armv7a-linux-androideabi"
+      ABI_CFLAGS="-march=armv7-a -mfloat-abi=softfp -mfpu=vfpv3-d16 -mthumb"
+      ABI_LDFLAGS="-march=armv7-a -Wl,--fix-cortex-a8"
+      ;;
+    arm64-v8a)
+      HOST=aarch64-linux-android
+      CPU=aarch64
+      GPGERR_LOCKOBJ=lock-obj-pub.aarch64-unknown-linux-android.h
+      GPGERR_LOCKOBJ_DEST=$GPGERR_LOCKOBJ
+      TOOLS_PREFIX="aarch64-linux-android"
+      ;;
+    x86)
+      HOST=i686-linux-android
+      CPU=x86
+      GPGERR_LOCKOBJ=lock-obj-pub.i686-linux-android.h
+      GPGERR_LOCKOBJ_DEST=lock-obj-pub.linux-android.h
+      TOOLS_PREFIX="i686-linux-android"
+      ;;
+    x86_64)
+      HOST=x86_64-linux-android
+      CPU=x86_64
+      GPGERR_LOCKOBJ=lock-obj-pub.linux-android.h
+      GPGERR_LOCKOBJ_DEST=$GPGERR_LOCKOBJ
+      TOOLS_PREFIX="x86_64-linux-android"
+      ;;
+    *)
+      echo "Invalid ABI: $ABI" >&2
+      exit 1
+      ;;
+  esac
+
+  TOOLS_PREFIX="${TOOLS_PREFIX}${MIN_SDK}"
+  BUILD_ROOT=`readlink -f ${TOP_DIR}/build/$ABI`
+  INSTALL_DIR="$BUILD_ROOT/install"
+
+  export CC="${TOOLS_PREFIX}-clang"
+  export RANLIB="llvm-ranlib"
+  export AR="llvm-ar"
+  export NM="llvm-nm"
+  export STRIP="llvm-strip"
+  export OBJCOPY="llvm-objcopy"
+  export READELF="llvm-readelf"
+
+  local gc_sections_flags=
+  if [[ $BUILD_TYPE == "Release" ]]; then
+    # -f* together with gc-sections and exclude-libs removes unused functions
+    gc_sections_flags="-fvisibility=hidden -ffunction-sections -fdata-sections"
+  fi
+
+  export CFLAGS="${BUILD_TYPE_CFLAGS} -fPIC ${gc_sections_flags} $ABI_CFLAGS"
+  export LDFLAGS="${ABI_LDFLAGS}"
+}
+
+function select_host_abi {
+  ABI="x86_64"
+  HOST=x86_64-linux-gnu
+  CPU=x86_64
+
+  BUILD_ROOT=`readlink -f ${TOP_DIR}/build/host-$ABI`
+  INSTALL_DIR="$BUILD_ROOT/install"
+
+  # Use system compiler (clang)
+  export CC="clang"
+  export CXX="clang++"
+  export RANLIB="ranlib"
+  export AR="ar"
+  export NM="nm"
+  export STRIP="strip"
+  export OBJCOPY="objcopy"
+  export READELF="readelf"
+
+  local gc_sections_flags=
+  if [[ $BUILD_TYPE == "Release" ]]; then
+    gc_sections_flags="-fvisibility=hidden -ffunction-sections -fdata-sections"
+  fi
+
+  export CFLAGS="${BUILD_TYPE_CFLAGS} -fPIC ${gc_sections_flags}"
+  export LDFLAGS=""
+}
+
+function build_iconv {
+  # required by glib2 on older Android SDKs
+  local host_flag=
+  if [ -z "$HOST_BUILD_MODE" ]; then
+    host_flag="--host $HOST"
+  fi
+
+  "${ICONV_SRC}/configure" --prefix="$INSTALL_DIR" \
+      $host_flag \
+      --enable-static --disable-shared --disable-tests -disable-doc
+  $MAKE install
+}
+
+function build_libffi {
+  local host_flag=
+  if [ -z "$HOST_BUILD_MODE" ]; then
+    host_flag="--host $HOST"
+  fi
+
+  "${LIBFFI_SRC}/configure" --prefix="$INSTALL_DIR" \
+      $host_flag \
+      --enable-static --disable-shared --disable-tests -disable-doc
+  $MAKE install
+}
+
+function build_glib2 {
+  # https://docs.gtk.org/glib/cross-compiling.html
+  # https://mesonbuild.com/Cross-compilation.html
+  cd "$GLIB2_SRC"
+
+  # generate cross-file
+  local system_type='android'
+  if [ ! -z "$HOST_BUILD_MODE" ]; then
+    system_type='linux'
+  fi
+
+  cross_file=`readlink -f ${BUILD}/cross-file.txt`
+  cat > "$cross_file" <<EOF
+[host_machine]
+system = '${system_type}'
+cpu_family = '${CPU}'
+cpu = '${CPU}'
+endian = 'little'
+
+[binaries]
+c = '${CC}'
+ar = '${AR}'
+ld = '${CC}'
+objcopy = '${OBJCOPY}'
+strip = '${STRIP}'
+EOF
+
+  # patch to search iconv into the INSTALL_DIR
+  restore_glib2_meson_build
+  sed -i "s|libiconv = dependency('iconv')|libiconv = declare_dependency(\
+    link_args : ['-L${INSTALL_DIR}/lib', '-liconv'],\
+    include_directories : include_directories('${INSTALL_DIR}/include'))|g" "$GLIB2_SRC/meson.build"
+
+  # NOTE: only download pinned dependencies, install the other ones manually (e.g. libffi)
+  meson subprojects download pcre2 proxy-libintl
+
+  PKG_CONFIG="`which pkg-config`" \
+  PKG_CONFIG_LIBDIR="$INSTALL_DIR/lib/pkgconfig" \
+  meson setup --cross-file "$cross_file" \
+      --prefix="$INSTALL_DIR" \
+      --wrap-mode=nodownload \
+      -Dselinux=disabled -Dxattr=false -Dlibmount=disabled \
+      -Dbsymbolic_functions=false -Dtests=false -Dnls=disabled \
+      -Dglib_debug=disabled -Dglib_assert=false -Dglib_checks=false \
+      -Dlibelf=disabled -Dintrospection=disabled \
+      -Ddefault_library=static \
+      --buildtype=$MESON_BUILD_TYPE \
+      "$BUILD"
+
+  meson compile -C "$BUILD" glib-2.0
+  cd "$BUILD"
+  meson install
+
+  restore_glib2_meson_build
+}
+
+function build_gpgerror {
+  # https://stackoverflow.com/questions/45837496/compiling-libgcrypt-and-libgpgerror-for-android-with-cmake
+  cd "$GPGERROR_SRC"
+  ./autogen.sh
+  cd "$BUILD"
+
+  local host_flag=
+  if [ -z "$HOST_BUILD_MODE" ]; then
+    host_flag="--host $HOST"
+  fi
+
+  "$GPGERROR_SRC/configure" --prefix="$INSTALL_DIR" \
+      $host_flag \
+      --enable-static --disable-shared --disable-tests -disable-doc
+
+  if [ -z "$HOST_BUILD_MODE" ]; then
+    # needed to manually generate lock-obj-pub. files. Run from /data/local/tmp
+    cd src
+    $MAKE gen-posix-lock-obj
+    cd -
+
+    # patch: install the correct lock file
+    # NOTE: the gpgerror source dir is shared across the arch builds
+    lock_obj="$GPGERROR_SRC/src/syscfg/$GPGERR_LOCKOBJ_DEST"
+    rm -f "$lock_obj"
+    cp ${TOP_DIR}/gpgerror-lock-obj/$GPGERR_LOCKOBJ "$lock_obj"
+  fi
+
+  # build and install
+  $MAKE install
+}
+
+function build_gcrypt {
+  cd "$GCRYPT_SRC"
+  ./autogen.sh
+  cd "$BUILD"
+
+  # patch: remove tests generation, which fails in basic.c for x86_64
+  sed -i "s/ tests$//g" "$GCRYPT_SRC/Makefile.in"
+
+  local host_flag=
+  if [ -z "$HOST_BUILD_MODE" ]; then
+    host_flag="--host $HOST"
+  fi
+
+  "$GCRYPT_SRC/configure" --prefix="$INSTALL_DIR" \
+      $host_flag \
+      --enable-static --disable-shared -disable-doc \
+      --enable-ciphers="arcfour des aes rfc2268 seed camellia idea chacha20 sm4" \
+      --enable-digests="md5 sha1 sha256 sha512 sha3 sm3 blake2" \
+      --enable-pubkey-ciphers="dsa rsa ecc"
+
+  # patch: disable MPI sub1/add1, which fails with "relocation R_386_32 cannot be used against local symbol" for x86
+  if [[ $ABI == x86 ]]; then
+    # mpih-sub1
+    sed -i 's/^mpih_sub1 = mpih-sub1-asm.S$/mpih_sub1 = mpih-sub1.c/g' "mpi/Makefile"
+    sed -i 's|mpih-sub1-asm.lo|mpih-sub1.lo|g' "mpi/Makefile"
+    cp "$GCRYPT_SRC/mpi/generic/mpih-sub1.c" mpi/
+
+    # mpih-add1-asm.o
+    sed -i 's/^mpih_add1 = mpih-add1-asm.S$/mpih_add1 = mpih-add1.c/g' "mpi/Makefile"
+    sed -i 's|mpih-add1-asm.lo|mpih-add1.lo|g' "mpi/Makefile"
+    cp "$GCRYPT_SRC/mpi/generic/mpih-add1.c" mpi/
+  fi
+
+  $MAKE install
+}
+
+function build_nghttp2 {
+  cd "$BUILD"
+
+  local host_flag=
+  if [ -z "$HOST_BUILD_MODE" ]; then
+    host_flag="--host $HOST"
+  fi
+
+  "$NGHTTP2_SRC/configure" --prefix="$INSTALL_DIR" \
+      $host_flag \
+      --enable-static --disable-shared \
+      --enable-lib-only
+
+  $MAKE install
+}
+
+function build_lemon {
+  # build lemon for the build machine
+  local host_wireshark="${HOST_BUILD}/wireshark"
+
+  if [ ! -x "$host_wireshark/run/lemon" ]; then
+    rm -rf "$host_wireshark"
+    mkdir -p "$host_wireshark"
+    cd "$host_wireshark"
+
+    cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF "$WIRESHARK_SRC"
+    $MAKE lemon
+  fi
+}
+
+function build_wireshark {
+  # https://zwyuan.github.io/2016/07/18/cross-compile-wireshark-for-android
+  local android_opts=
+
+  if [ -z "$HOST_BUILD_MODE" ]; then
+    # Android cross-compilation
+    android_opts="-DCMAKE_SYSTEM_NAME=Android -DCMAKE_TOOLCHAIN_FILE=$ANDROID_CMAKE_TOOLCHAIN \
+      -DANDROID_NDK=$ANDROID_NDK_ROOT -DANDROID_ABI=$ABI -DCMAKE_ANDROID_ARCH_ABI=$ABI \
+      -DANDROID_PLATFORM=android-$MIN_SDK -DCMAKE_SYSTEM_VERSION=$MIN_SDK"
+  fi
+
+  # Disable optional deps that ushark does not use. On the Android sysroot these
+  # are absent anyway, but on the host they would otherwise be auto-detected from
+  # the system, pulling unresolved libxml2/c-ares symbols into the static libs
+  # that the ushark link does not provide. Keep all targets self-contained.
+  cmake $android_opts \
+    -DCMAKE_DISABLE_FIND_PACKAGE_LibXml2=ON \
+    -DCMAKE_DISABLE_FIND_PACKAGE_CARES=ON \
+    -DLEMON_BIN="${HOST_BUILD}/wireshark/run/lemon" \
+    -DHAVE_C99_VSNPRINTF=TRUE \
+    -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_SHARED_LIBS=OFF -DENABLE_WERROR=OFF \
+    -DGLIB2_LIBRARY="$INSTALL_DIR/lib/libglib-2.0.a" \
+    -DGLIB2_MAIN_INCLUDE_DIR="$INSTALL_DIR/include/glib-2.0" -DGLIB2_INTERNAL_INCLUDE_DIR="$INSTALL_DIR/lib/glib-2.0/include" \
+    -DGTHREAD2_LIBRARY="$INSTALL_DIR/lib/libgthread-2.0.a" -DGTHREAD2_INCLUDE_DIR="$INSTALL_DIR/include" \
+    -DGCRYPT_LIBRARY="$INSTALL_DIR/lib/libgcrypt.a" -DGCRYPT_INCLUDE_DIR="$INSTALL_DIR/include" \
+    -DGCRYPT_ERROR_LIBRARY="$INSTALL_DIR/lib/libgpg-error.a" \
+    -DPCRE2_LIBRARY="$INSTALL_DIR/lib/libpcre2-8.a" -DPCRE2_INCLUDE_DIR="$INSTALL_DIR/include" \
+    -DNGHTTP2_LIBRARY="$INSTALL_DIR/lib/libnghttp2.a" -DNGHTTP2_INCLUDE_DIR="$INSTALL_DIR/include/nghttp2" \
+    "$WIRESHARK_SRC"
+
+  $MAKE epan wiretap wsutil ui
+
+  # install
+  find ./run -maxdepth 1 -name '*.a' -exec cp "{}" "$INSTALL_DIR/lib" \;
+}
+
+function build_ushark {
+  local src="`readlink -f \"$USHARK_SRC/libushark\"`"
+  local wireshark_build="`readlink -f \"$BUILD/../wireshark\"`"
+  local libs="${INSTALL_DIR}/lib"
+
+  USHARK_CFLAGS="${CFLAGS} -I${WIRESHARK_SRC} -I${WIRESHARK_SRC}/include -I${wireshark_build}\
+    -I${INSTALL_DIR}/include -I${INSTALL_DIR}/include/glib-2.0 -I${INSTALL_DIR}/lib/glib-2.0/include"
+
+  echo "Building http2.o ..."
+  ${CC} $USHARK_CFLAGS -c "$src/http2.c" -o http2.o
+
+  echo "Building ushark.o ..."
+  ${CC} $USHARK_CFLAGS -c "$src/ushark.c" -o ushark.o
+
+  local gc_sections_flags=
+  if [[ $BUILD_TYPE == "Release" ]]; then
+    gc_sections_flags="-Wl,--gc-sections -Wl,--exclude-libs=ALL"
+  fi
+  
+  local libintl=
+  if [ -z "$HOST_BUILD_MODE" ]; then
+    libintl="$libs/libintl.a"
+  fi
+
+  echo "Building libushark.so ..."
+  ${CC} $USHARK_CFLAGS $LDFLAGS $gc_sections_flags -z defs \
+    -shared -Wl,-soname,libushark.so \
+    -o libushark.so http2.o ushark.o \
+    $libs/libwireshark.a \
+		$libs/libwiretap.a $libs/libwsutil.a \
+		$libs/libui.a \
+    $libs/libglib-2.0.a $libs/libgcrypt.a $libs/libgpg-error.a \
+    $libs/libiconv.a $libs/libpcre2-8.a $libs/libnghttp2.a \
+    $libintl -lm
+
+  if [ -z "$HOST_BUILD_MODE" ]; then
+    dist="${TOP_DIR}/dist/jniLibs/$ABI"
+  else
+    dist="${TOP_DIR}/dist/$ABI"
+  fi
+  rm -rf "$dist"
+  mkdir -p "$dist"
+  cp libushark.so "$dist"
+
+  # Extract debug symbols to separate file
+  echo "Extracting debug symbols..."
+  ${OBJCOPY} --only-keep-debug "$dist/libushark.so" "$dist/libushark.so.debug"
+
+  if [[ $BUILD_TYPE == "Release" ]]; then
+    ${STRIP} "$dist/libushark.so"
+  fi
+
+  ${READELF} --dynamic "$dist/libushark.so" | grep NEEDED
+
+  # NOTE: Android won't load the library if it has .text relocations
+  # https://android.googlesource.com/platform/bionic/+/master/android-changes-for-ndk-developers.md#Text-Relocations-Enforced-for-API-level-23
+  if ${READELF} --dynamic "$dist/libushark.so" | grep TEXTREL; then
+    echo ".text relocation found, this is a bug" >&2
+    exit 1
+  fi
+}
+
+function check_error {
+  if [ ! -z "$CUR_BUILD" ]; then
+    if [ -z "$VERBOSE" ]; then
+      # In non-verbose mode the label was left without a trailing newline
+      echo
+
+      if [ -n "$CUR_LOGFILE" ] && [ -f "$CUR_LOGFILE" ]; then
+        echo "Fatal error while building '$CUR_BUILD'" >&2
+        echo "----- last 40 lines of $CUR_LOGFILE -----" >&2
+        tail -n 40 "$CUR_LOGFILE" >&2
+        echo "----- (full log: $CUR_LOGFILE) -----" >&2
+        return
+      fi
+    fi
+
+    echo "Fatal error while building '$CUR_BUILD'" >&2
+  fi
+}
+
+function run_build {
+  local name="$1"
+  CUR_BUILD="$name"
+  CUR_LOGFILE="${BUILD_ROOT:-$TOP_DIR/build}/$name.log"
+
+  if [ -n "$VERBOSE" ]; then
+    echo "[+] Build $name..."
+    ( set -o pipefail; eval "build_$name" 2>&1 | tee "$CUR_LOGFILE" )
+  else
+    echo -n "[+] Build $name..."
+    eval "build_$name" > "$CUR_LOGFILE" 2>&1
+    echo
+  fi
+
+  CUR_BUILD=
+  CUR_LOGFILE=
+}
+
+HOST_BUILD="${TOP_DIR}/build/host"
+mkdir -p "${HOST_BUILD}"
+
+compiled=
+declare -a abis=(armeabi-v7a arm64-v8a x86 x86_64)
+declare -a libs=(iconv libffi glib2 gpgerror gcrypt nghttp2 wireshark ushark)
+
+trap check_error EXIT
+
+run_build lemon
+cd "$TOP_DIR"
+
+# Determine what to build
+build_android=
+build_host=
+
+if [ ! -z "$HOST_BUILD_MODE" ]; then
+  # --host flag specified: only build host
+  if [[ ! -z "$TARGET_ABI" ]] && [[ "$TARGET_ABI" != "x86_64" ]]; then
+    echo "Host builds only support x86_64 ABI" >&2
+    exit 1
+  fi
+  build_host=1
+elif [ ! -z "$TARGET_ABI" ]; then
+  # -a flag specified without --host: only build that Android ABI
+  build_android=1
+else
+  # Default: build all Android ABIs + host x86_64
+  build_android=1
+  build_host=1
+fi
+
+# Build for Android ABIs
+if [ ! -z "$build_android" ]; then
+  for abi in "${abis[@]}"; do
+    if [[ -z "$TARGET_ABI" ]] || [[ "$TARGET_ABI" == $abi ]]; then
+      select_abi $abi
+      compiled=1
+      echo "## Target ABI: $abi"
+
+      if [[ -z "$TARGET_LIB" ]]; then
+        rm -rf "$BUILD_ROOT"
+        rm -rf "$INSTALL_DIR"
+      fi
+      mkdir -p "$BUILD_ROOT"
+      mkdir -p "$INSTALL_DIR"
+
+      for lib in "${libs[@]}"; do
+        if [[ -z "$TARGET_LIB" ]] || [[ "$TARGET_LIB" == $lib ]]; then
+          BUILD="$BUILD_ROOT/$lib"
+          rm -rf "$BUILD"
+          mkdir -p "$BUILD"
+          cd "$BUILD"
+
+          run_build "$lib"
+        fi
+
+        cd "$TOP_DIR"
+      done
+    fi
+  done
+fi
+
+# Build for host x86_64
+if [ ! -z "$build_host" ]; then
+  HOST_BUILD_MODE=1
+  select_host_abi
+  compiled=1
+  echo "## Host build for x86_64"
+
+  if [[ -z "$TARGET_LIB" ]]; then
+    rm -rf "$BUILD_ROOT"
+    rm -rf "$INSTALL_DIR"
+  fi
+  mkdir -p "$BUILD_ROOT"
+  mkdir -p "$INSTALL_DIR"
+
+  for lib in "${libs[@]}"; do
+    if [[ -z "$TARGET_LIB" ]] || [[ "$TARGET_LIB" == $lib ]]; then
+      BUILD="$BUILD_ROOT/$lib"
+      rm -rf "$BUILD"
+      mkdir -p "$BUILD"
+      cd "$BUILD"
+
+      run_build "$lib"
+    fi
+
+    cd "$TOP_DIR"
+  done
+  HOST_BUILD_MODE=
+fi
+
+if [[ ! -z "$TARGET_ABI" ]] && [[ -z $compiled ]]; then
+  echo "Invalid ABI: $TARGET_ABI" >&2
+  usage
+  exit 1
+fi
