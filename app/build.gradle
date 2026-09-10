@@ -93,7 +93,7 @@ android {
         main.java.srcDirs += 'src/main/jni/submodules/MaxMind-DB-Reader-java/src/main/java'
 
         // Note: must use "setRoot" to make this a per-flavor setting
-        standard.setRoot('../submodules/PCAPdroid-ushark-bin/release')
+        standard.setRoot('src/main/jni/submodules/PCAPdroid-ushark-bin/release')
     }
 
     testOptions {
@@ -129,7 +129,7 @@ abstract class BuildHostZstdJniTask extends DefaultTask {
 
 tasks.register('buildHostZstdJni', BuildHostZstdJniTask) {
     jniSrcDir = file("src/main/jni/zstd")
-    zstdLibDir = file("${rootDir}/submodules/zstd/lib")
+    zstdLibDir = file("${projectDir}/src/main/jni/submodules/zstd/lib")
     cmakeBuildDir = file("${buildDir}/hostJni/cmake")
     outputDir = file("${buildDir}/hostJni")
 }
