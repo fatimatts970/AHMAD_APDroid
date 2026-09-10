@@ -5,7 +5,7 @@ if(NOT DEFINED ROOTDIR)
     set(ROOTDIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 endif()
 
-set(ZSTD_ROOT ${ROOTDIR}/submodules/zstd/lib)
+set(ZSTD_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../submodules/zstd/lib)
 
 # Decoder-only: common + decompress sources
 set(ZSTD_SOURCES
