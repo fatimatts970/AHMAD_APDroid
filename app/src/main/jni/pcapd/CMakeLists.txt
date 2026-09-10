@@ -1,7 +1,7 @@
 project(pcapd C)
 
 # libpcap
-set(LIBPCAP_ROOT ${ROOTDIR}/submodules/libpcap)
+set(LIBPCAP_ROOT ${ROOTDIR}/app/src/main/jni/submodules/libpcap)
 include_directories(${LIBPCAP_ROOT})
 
 set(LIBPCAP_GEN ${ROOTDIR}/generated/libpcap)

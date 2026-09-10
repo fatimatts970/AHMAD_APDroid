@@ -16,8 +16,8 @@ set(ROOTDIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../..)
 
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/.. ${CMAKE_CURRENT_BINARY_DIR}/main)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)
-include_directories(${ROOTDIR}/submodules/zdtun)
-include_directories(${ROOTDIR}/submodules/nDPI/src/include)
+include_directories(${ROOTDIR}/app/src/main/jni/submodules/zdtun)
+include_directories(${ROOTDIR}/app/src/main/jni/submodules/nDPI/src/include)
 include_directories(.)
 
 if(FUZZING)
