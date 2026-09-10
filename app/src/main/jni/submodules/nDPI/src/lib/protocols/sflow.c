@@ -1,7 +1,7 @@
 /*
  * sflow.c
  *
- * Copyright (C) 2011-15 - ntop.org
+ * Copyright (C) 2011-26 - ntop.org
  *
  * nDPI is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -18,45 +18,49 @@
  *
  */
 
+#include "ndpi_protocol_ids.h"
+
+#define NDPI_CURRENT_PROTO NDPI_PROTOCOL_SFLOW
 
 #include "ndpi_api.h"
+#include "ndpi_private.h"
 
-#ifdef NDPI_PROTOCOL_SFLOW
-
-static void ndpi_check_sflow(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
+static void ndpi_search_sflow(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  struct ndpi_packet_struct *packet = &flow->packet;  
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
   // const u_int8_t *packet_payload = packet->payload;
   u_int32_t payload_len = packet->payload_packet_len;
+
+  NDPI_LOG_DBG(ndpi_struct, "search sflow\n");
 
   if((packet->udp != NULL)
      && (payload_len >= 24)
      /* Version */
-     && (packet->payload[0] == 0) && (packet->payload[1] == 0) && (packet->payload[2] == 0)
-     && ((packet->payload[3] == 2) || (packet->payload[3] == 5))) {
-    NDPI_LOG(NDPI_PROTOCOL_SFLOW, ndpi_struct, NDPI_LOG_DEBUG, "Found sflow.\n");
-    ndpi_set_detected_protocol(ndpi_struct, flow, NDPI_PROTOCOL_SFLOW, NDPI_PROTOCOL_UNKNOWN);
+     && ntohl(get_u_int32_t(packet->payload, 0)) == 0x00000005
+     /* Agent Address type: IPv4 / IPv6 */
+     && (ntohl(get_u_int32_t(packet->payload, 4)) == 0x00000001 ||
+         ntohl(get_u_int32_t(packet->payload, 4)) == 0x00000002)) {
+    NDPI_LOG_INFO(ndpi_struct, "found (probably) sflow\n");
+    if (flow->core.packet_counter >= 2)
+    {
+      NDPI_LOG_INFO(ndpi_struct, "found sflow\n");
+      ndpi_set_detected_protocol(ndpi_struct, &flow->core,
+                                 NDPI_PROTOCOL_SFLOW,
+                                 NDPI_PROTOCOL_UNKNOWN,
+                                 NDPI_CONFIDENCE_DPI);
+    }
     return;
   }
+
+  NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 }
 
-void ndpi_search_sflow(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
+void init_sflow_dissector(struct ndpi_detection_module_struct *ndpi_struct)
 {
-  NDPI_LOG(NDPI_PROTOCOL_SFLOW, ndpi_struct, NDPI_LOG_DEBUG, "sflow detection...\n");
-  ndpi_check_sflow(ndpi_struct, flow);
+  ndpi_register_dissector("sFlow", ndpi_struct,
+                     ndpi_search_sflow,
+                     NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_UDP_WITH_PAYLOAD,
+                     DISSECTOR_LICENSE_LGPL,
+                     1, NDPI_PROTOCOL_SFLOW);
 }
 
-
-void init_sflow_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
-{
-  ndpi_set_bitmask_protocol_detection("sFlow", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_SFLOW,
-				      ndpi_search_sflow,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_UDP_WITH_PAYLOAD,
-				      SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-
-  *id += 1;
-}
-
-#endif

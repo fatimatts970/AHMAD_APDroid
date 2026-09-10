@@ -1,3 +1,16 @@
-TESTS = do.sh
+TESTS = do.sh do-dga.sh
 
-EXTRA_DIST = do.sh pcap result
+if BUILD_UNITTESTS
+TESTS += do-unit.sh
+endif
+
+EXTRA_DIST = cfgs/*/pcap cfgs/*/result cfgs/*/*.txt performance \
+	unit/unit.c unit/Makefile.in \
+	dga/dga_evaluate.c dga/Makefile.in dga/README.md dga/test_dga.csv dga/test_non_dga.csv do-dga.sh.in \
+	do-unit.sh.in do.sh.in ossfuzz.sh
+
+all:
+	@echo -n ""
+
+distclean-local:
+	$(RM) do.sh do-dga.sh do-unit.sh

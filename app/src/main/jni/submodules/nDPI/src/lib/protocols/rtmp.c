@@ -1,6 +1,7 @@
 /*
  * rtmp.c
  *
+ * Copyright (C) 2020 - ntop.org
  * Copyright (C) 2014 Tomasz Bujlow <tomasz@skatnet.dk>
  * 
  * The signature is based on the Libprotoident library.
@@ -23,83 +24,79 @@
  * 
  */
 
+#include "ndpi_protocol_ids.h"
+
+#define NDPI_CURRENT_PROTO NDPI_PROTOCOL_RTMP
 
 #include "ndpi_api.h"
+#include "ndpi_private.h"
 
-#ifdef NDPI_PROTOCOL_RTMP
 static void ndpi_int_rtmp_add_connection(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  ndpi_set_detected_protocol(ndpi_struct, flow, NDPI_PROTOCOL_RTMP, NDPI_PROTOCOL_UNKNOWN);
+  ndpi_set_detected_protocol(ndpi_struct, &flow->core, NDPI_PROTOCOL_RTMP, NDPI_PROTOCOL_UNKNOWN, NDPI_CONFIDENCE_DPI);
 }
 
 static void ndpi_check_rtmp(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  struct ndpi_packet_struct *packet = &flow->packet;  
-  u_int32_t payload_len = packet->payload_packet_len;
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
   
-  /* Break after 20 packets. */
-  if (flow->packet_counter > 20) {
-    NDPI_LOG(NDPI_PROTOCOL_RTMP, ndpi_struct, NDPI_LOG_DEBUG, "Exclude RTMP.\n");
-    NDPI_ADD_PROTOCOL_TO_BITMASK(flow->excluded_protocol_bitmask, NDPI_PROTOCOL_RTMP);
+  /* Look for the handshake, which is only at the beginning of the flow:
+      C->S: 0x03 + 1536 bytes
+      S->C: 0X03 + something...; we don't really check the length of the burst sent by the server, to avoid to save further state
+     See: https://en.wikipedia.org/w/index.php?title=Real-Time_Messaging_Protocol&section=12#Handshake */
+
+  if(!ndpi_seen_flow_beginning(flow)) {
+    NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
     return;
   }
-  
-  /* Check if we so far detected the protocol in the request or not. */
-  if (flow->rtmp_stage == 0) {
-     NDPI_LOG(NDPI_PROTOCOL_RTMP, ndpi_struct, NDPI_LOG_DEBUG, "RTMP stage 0: \n");
+
+  /* TODO: should we check somehow for mid-flows? */
+
+  if(flow->metadata.l4.tcp.rtmp_stage == 0) {
+    NDPI_LOG_DBG2(ndpi_struct, "RTMP stage 0: \n");
      
-     if ((payload_len >= 4) && ((packet->payload[0] == 0x03) || (packet->payload[0] == 0x06))) {
-       NDPI_LOG(NDPI_PROTOCOL_RTMP, ndpi_struct, NDPI_LOG_DEBUG, "Possible RTMP request detected, we will look further for the response...\n");
-       
-       /* Encode the direction of the packet in the stage, so we will know when we need to look for the response packet. */
-       flow->rtmp_stage = packet->packet_direction + 1;
-     }
-     
-  } else {
-    NDPI_LOG(NDPI_PROTOCOL_RTMP, ndpi_struct, NDPI_LOG_DEBUG, "RTMP stage %u: \n", flow->rtmp_stage);
-    
-    /* At first check, if this is for sure a response packet (in another direction. If not, do nothing now and return. */
-    if ((flow->rtmp_stage - packet->packet_direction) == 1) {
+    if(packet->payload[0] == 0x03) {
+      flow->metadata.l4.tcp.rtmp_stage = packet->packet_direction + 1;
+      flow->metadata.l4.tcp.rtmp_client_buffer_len = packet->payload_packet_len;
       return;
     }
-    
-    /* This is a packet in another direction. Check if we find the proper response. */
-    if ((payload_len >= 4) && ((packet->payload[0] == 0x03) || (packet->payload[0] == 0x06) || (packet->payload[0] == 0x08) || (packet->payload[0] == 0x09) || (packet->payload[0] == 0x0a))) {
-      NDPI_LOG(NDPI_PROTOCOL_RTMP, ndpi_struct, NDPI_LOG_DEBUG, "Found RTMP.\n");
+  } else {
+    NDPI_LOG_DBG2(ndpi_struct, "RTMP stage %u (client already sent %d bytes)\n",
+                  flow->metadata.l4.tcp.rtmp_stage, flow->metadata.l4.tcp.rtmp_client_buffer_len);
+
+    /* At first check, if this is for sure a response packet (in another direction. If not, do nothing now and return. */
+    if(flow->metadata.l4.tcp.rtmp_stage - packet->packet_direction == 1) {
+      /* From the same direction */
+      flow->metadata.l4.tcp.rtmp_client_buffer_len += packet->payload_packet_len;
+      if(flow->metadata.l4.tcp.rtmp_client_buffer_len <= 1537)
+        return;
+    }
+
+    /* This is a packet in another direction */
+    if(packet->payload[0] == 0x03 && flow->metadata.l4.tcp.rtmp_client_buffer_len == 1537) {
+      NDPI_LOG_INFO(ndpi_struct, "found RTMP\n");
       ndpi_int_rtmp_add_connection(ndpi_struct, flow);
-    } else {
-      NDPI_LOG(NDPI_PROTOCOL_RTMP, ndpi_struct, NDPI_LOG_DEBUG, "The reply did not seem to belong to RTMP, resetting the stage to 0...\n");
-      flow->rtmp_stage = 0;
-    }
-    
-  }
-}
-
-void ndpi_search_rtmp(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
-{
-  struct ndpi_packet_struct *packet = &flow->packet;
-
-  NDPI_LOG(NDPI_PROTOCOL_RTMP, ndpi_struct, NDPI_LOG_DEBUG, "RTMP detection...\n");
-
-  /* skip marked packets */
-  if (packet->detected_protocol_stack[0] != NDPI_PROTOCOL_RTMP) {
-    if (packet->tcp_retransmission == 0) {
-      ndpi_check_rtmp(ndpi_struct, flow);
+      return;
     }
   }
+
+  NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 }
 
-
-void init_rtmp_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
+static void ndpi_search_rtmp(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  ndpi_set_bitmask_protocol_detection("RTMP", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_RTMP,
-				      ndpi_search_rtmp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_TCP_WITH_PAYLOAD_WITHOUT_RETRANSMISSION,
-				      SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
+  NDPI_LOG_DBG(ndpi_struct, "search RTMP\n");
 
-  *id += 1;
+  ndpi_check_rtmp(ndpi_struct, flow);
 }
 
-#endif
+
+void init_rtmp_dissector(struct ndpi_detection_module_struct *ndpi_struct)
+{
+  ndpi_register_dissector("RTMP", ndpi_struct,
+                     ndpi_search_rtmp,
+                     NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_TCP_WITH_PAYLOAD_WITHOUT_RETRANSMISSION,
+                     DISSECTOR_LICENSE_LGPL,
+                     1, NDPI_PROTOCOL_RTMP);
+}
+

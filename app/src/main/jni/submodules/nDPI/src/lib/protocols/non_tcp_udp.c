@@ -1,8 +1,8 @@
 /*
  * non_tcp_udp.c
  *
- * Copyright (C) 2009-2011 by ipoque GmbH
- * Copyright (C) 2011-15 - ntop.org
+ * Copyright (C) 2009-11 - ipoque GmbH
+ * Copyright (C) 2011-26 - ntop.org
  *
  * This file is part of nDPI, an open source deep packet inspection
  * library based on the OpenDPI and PACE technology by ipoque GmbH
@@ -23,176 +23,163 @@
  */
 
 
-#include "ndpi_protocols.h"
+#include "ndpi_protocol_ids.h"
 
-#if defined(NDPI_PROTOCOL_IP_IPSEC) || defined(NDPI_PROTOCOL_IP_GRE) || defined(NDPI_PROTOCOL_IP_ICMP)  || defined(NDPI_PROTOCOL_IP_IGMP) || defined(NDPI_PROTOCOL_IP_EGP) || defined(NDPI_PROTOCOL_IP_SCTP) || defined(NDPI_PROTOCOL_IP_OSPF) || defined(NDPI_PROTOCOL_IP_IP_IN_IP)
+#include "ndpi_api.h"
+#include "ndpi_private.h"
 
 #define set_protocol_and_bmask(nprot)					\
   {									\
-    if (NDPI_COMPARE_PROTOCOL_TO_BITMASK(ndpi_struct->detection_bitmask,nprot) != 0) \
+    if (is_proto_enabled(ndpi_struct, nprot))                           \
       {									\
-	ndpi_set_detected_protocol(ndpi_struct, flow,			\
-				   nprot, NDPI_PROTOCOL_UNKNOWN);		\
+	ndpi_set_detected_protocol(ndpi_struct, &flow->core,			\
+				   nprot, NDPI_PROTOCOL_UNKNOWN, NDPI_CONFIDENCE_DPI);		\
       }									\
   }
 
 
-void ndpi_search_in_non_tcp_udp(struct ndpi_detection_module_struct
-				*ndpi_struct, struct ndpi_flow_struct *flow)
+static void ndpi_search_in_non_tcp_udp(struct ndpi_detection_module_struct
+				       *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  struct ndpi_packet_struct *packet = &flow->packet;
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
 
-  if (packet->iph == NULL) {
-#ifdef NDPI_DETECTION_SUPPORT_IPV6
-    if (packet->iphv6 == NULL)
-#endif
-      return;
-  }
-
-  switch (packet->l4_protocol) {
-#ifdef NDPI_PROTOCOL_IP_IPSEC
+  switch (flow->core.l4_proto) {
   case NDPI_IPSEC_PROTOCOL_ESP:
-  case NDPI_IPSEC_PROTOCOL_AH:
-    set_protocol_and_bmask(NDPI_PROTOCOL_IP_IPSEC);
+    set_protocol_and_bmask(NDPI_PROTOCOL_IP_ESP);
     break;
-#endif							/* NDPI_PROTOCOL_IP_IPSEC */
-#ifdef NDPI_PROTOCOL_IP_GRE
+
+  case NDPI_IPSEC_PROTOCOL_AH:
+    set_protocol_and_bmask(NDPI_PROTOCOL_IP_AH);
+    break;
+
   case NDPI_GRE_PROTOCOL_TYPE:
     set_protocol_and_bmask(NDPI_PROTOCOL_IP_GRE);
     break;
-#endif							/* NDPI_PROTOCOL_IP_GRE */
-#ifdef NDPI_PROTOCOL_IP_ICMP
+
   case NDPI_ICMP_PROTOCOL_TYPE:
     set_protocol_and_bmask(NDPI_PROTOCOL_IP_ICMP);
+
+    if(packet->payload_packet_len < sizeof(struct ndpi_icmphdr)) {
+      char buf[64];
+
+      snprintf(buf, sizeof(buf), "Packet too short (%d vs %u)",
+               packet->payload_packet_len, (unsigned int)sizeof(struct ndpi_icmphdr));
+      ndpi_set_risk(ndpi_struct, &flow->core, NDPI_MALFORMED_PACKET, buf);
+    } else {
+      u_int8_t icmp_type = (u_int8_t)packet->payload[0];
+      u_int8_t icmp_code = (u_int8_t)packet->payload[1];
+
+      /* https://www.iana.org/assignments/icmp-parameters/icmp-parameters.xhtml */
+      if(((icmp_type >= 44) && (icmp_type <= 252))
+         || (icmp_code > 15)) {
+        char buf[64];
+
+        snprintf(buf, sizeof(buf), "Invalid type (%u)/code(%u)",
+                 icmp_type, icmp_code);
+
+        ndpi_set_risk(ndpi_struct, &flow->core, NDPI_MALFORMED_PACKET, buf);
+      }
+
+      if(packet->payload_packet_len > sizeof(struct ndpi_icmphdr)) {
+        if(ndpi_struct->cfg.compute_entropy && (flow->core.skip_entropy_check == 0)) {
+          flow->metadata.entropy = ndpi_entropy(packet->payload + sizeof(struct ndpi_icmphdr),
+                                       packet->payload_packet_len - sizeof(struct ndpi_icmphdr));
+          ndpi_entropy2risk(ndpi_struct, flow);
+        }
+
+        u_int16_t chksm = icmp4_checksum(packet->payload, packet->payload_packet_len);
+
+        if(chksm) {
+          ndpi_set_risk(ndpi_struct, &flow->core, NDPI_MALFORMED_PACKET, "Invalid ICMP checksum");
+        }
+      }
+    }
+
     break;
-#endif							/* NDPI_PROTOCOL_IP_ICMP */
-#ifdef NDPI_PROTOCOL_IP_IGMP
+
   case NDPI_IGMP_PROTOCOL_TYPE:
     set_protocol_and_bmask(NDPI_PROTOCOL_IP_IGMP);
     break;
-#endif							/* NDPI_PROTOCOL_IP_IGMP */
-#ifdef NDPI_PROTOCOL_IP_EGP
+
   case NDPI_EGP_PROTOCOL_TYPE:
     set_protocol_and_bmask(NDPI_PROTOCOL_IP_EGP);
     break;
-#endif							/* NDPI_PROTOCOL_IP_EGP */
-#ifdef NDPI_PROTOCOL_IP_SCTP
+
   case NDPI_SCTP_PROTOCOL_TYPE:
     set_protocol_and_bmask(NDPI_PROTOCOL_IP_SCTP);
     break;
-#endif							/* NDPI_PROTOCOL_IP_SCTP */
-#ifdef NDPI_PROTOCOL_IP_OSPF
+
+  case NDPI_PGM_PROTOCOL_TYPE:
+    set_protocol_and_bmask(NDPI_PROTOCOL_IP_PGM);
+    break;
+
   case NDPI_OSPF_PROTOCOL_TYPE:
     set_protocol_and_bmask(NDPI_PROTOCOL_IP_OSPF);
     break;
-#endif							/* NDPI_PROTOCOL_IP_OSPF */
-#ifdef NDPI_PROTOCOL_IP_IP_IN_IP
+
   case NDPI_IPIP_PROTOCOL_TYPE:
     set_protocol_and_bmask(NDPI_PROTOCOL_IP_IP_IN_IP);
     break;
-#endif							/* NDPI_PROTOCOL_IP_IP_IN_IP */
-#ifdef NDPI_PROTOCOL_IP_ICMPV6
+
   case NDPI_ICMPV6_PROTOCOL_TYPE:
     set_protocol_and_bmask(NDPI_PROTOCOL_IP_ICMPV6);
+
+    if(packet->payload_packet_len < sizeof(struct ndpi_icmp6hdr)) {
+      char buf[64];
+
+      snprintf(buf, sizeof(buf), "Packet too short (%d vs %u)",
+               packet->payload_packet_len, (unsigned int)sizeof(struct ndpi_icmp6hdr));
+
+      ndpi_set_risk(ndpi_struct, &flow->core, NDPI_MALFORMED_PACKET, buf);
+    } else {
+      u_int8_t icmp6_type = (u_int8_t)packet->payload[0];
+      u_int8_t icmp6_code = (u_int8_t)packet->payload[1];
+
+      /* https://en.wikipedia.org/wiki/Internet_Control_Message_Protocol_for_IPv6 */
+      if(((icmp6_type >= 5) && (icmp6_type <= 127))
+         || ((icmp6_code >= 156) && (icmp6_type != 255))) {
+        char buf[64];
+
+        snprintf(buf, sizeof(buf), "Invalid type (%u)/code(%u)",
+                 icmp6_type, icmp6_code);
+
+        ndpi_set_risk(ndpi_struct, &flow->core, NDPI_MALFORMED_PACKET, buf);
+      }
+    }
+
     break;
-#endif							/* NDPI_PROTOCOL_IP_ICMPV6 */
-#ifdef NDPI_PROTOCOL_IP_VRRP
+
+  case NDPI_PIM_PROTOCOL_TYPE:
+    set_protocol_and_bmask(NDPI_PROTOCOL_IP_PIM);
+    break;
+
   case 112:
     set_protocol_and_bmask(NDPI_PROTOCOL_IP_VRRP);
     break;
-#endif							/* NDPI_PROTOCOL_IP_VRRP */
   }
+
+  NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 }
 
 
-void init_non_tcp_udp_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
+void init_non_tcp_udp_dissector(struct ndpi_detection_module_struct *ndpi_struct)
 {
-  
-  /* always add non tcp/udp if one protocol is compiled in */
-  NDPI_SAVE_AS_BITMASK(ndpi_struct->callback_buffer[*id].detection_bitmask, NDPI_PROTOCOL_UNKNOWN);
-
-#ifdef NDPI_CONTENT_IP_IPSEC
-  ndpi_set_bitmask_protocol_detection("IP_IPSEC", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_IP_IPSEC,
-				      ndpi_search_in_non_tcp_udp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_IPV4_OR_IPV6,
-				      NO_SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-  *id += 1;
-#endif
-#ifdef NDPI_CONTENT_IP_GRE 
-  ndpi_set_bitmask_protocol_detection("IP_GRE", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_IP_GRE,
-				      ndpi_search_in_non_tcp_udp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_IPV4_OR_IPV6,
-				      NO_SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-  *id += 1;
-#endif
-#ifdef NDPI_CONTENT_IP_ICMP
-  ndpi_set_bitmask_protocol_detection("IP_ICMP", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_IP_ICMP,
-				      ndpi_search_in_non_tcp_udp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_IPV4_OR_IPV6,
-				      NO_SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-  *id += 1;
-#endif
-#ifdef NDPI_CONTENT_IP_IGMP
-  ndpi_set_bitmask_protocol_detection("IP_IGMP", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_IP_IGMP,
-				      ndpi_search_in_non_tcp_udp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_IPV4_OR_IPV6,
-				      NO_SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-  *id += 1;
-#endif
-#ifdef NDPI_CONTENT_IP_EGP
-  ndpi_set_bitmask_protocol_detection("IP_EGP", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_IP_EGP,
-				      ndpi_search_in_non_tcp_udp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_IPV4_OR_IPV6,
-				      NO_SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-  *id += 1;
-#endif
-#ifdef NDPI_CONTENT_IP_SCTP
-  ndpi_set_bitmask_protocol_detection("IP_SCTP", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_IP_SCTP,
-				      ndpi_search_in_non_tcp_udp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_IPV4_OR_IPV6,
-				      NO_SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-  *id += 1;
-#endif
-#ifdef NDPI_CONTENT_IP_OSPF
-  ndpi_set_bitmask_protocol_detection("IP_OSPF", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_IP_OSPF,
-				      ndpi_search_in_non_tcp_udp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_IPV4_OR_IPV6,
-				      NO_SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-  *id += 1;
-#endif
-#ifdef NDPI_CONTENT_IP_IP_IN_IP
-  ndpi_set_bitmask_protocol_detection("IP_IP_IN_IP", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_IP_IP_IN_IP,
-				      ndpi_search_in_non_tcp_udp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_IPV4_OR_IPV6,
-				      NO_SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-  *id += 1;
-#endif
-#ifdef NDPI_CONTENT_IP_ICMPV6
-  ndpi_set_bitmask_protocol_detection("IP_ICMPV6", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_IP_ICMPV6,
-				      ndpi_search_in_non_tcp_udp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_IPV4_OR_IPV6,
-				      NO_SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-  *id += 1;
-#endif
-
+  ndpi_register_dissector("Non_TCP_UDP", ndpi_struct,
+                     ndpi_search_in_non_tcp_udp,
+                     NDPI_SELECTION_BITMASK_PROTOCOL_IPV4_OR_IPV6,
+                     DISSECTOR_LICENSE_LGPL,
+                     13,
+                     NDPI_PROTOCOL_IP_ESP,
+                     NDPI_PROTOCOL_IP_AH,
+                     NDPI_PROTOCOL_IP_GRE,
+                     NDPI_PROTOCOL_IP_ICMP,
+                     NDPI_PROTOCOL_IP_IGMP,
+                     NDPI_PROTOCOL_IP_EGP,
+                     NDPI_PROTOCOL_IP_SCTP,
+                     NDPI_PROTOCOL_IP_PGM,
+                     NDPI_PROTOCOL_IP_OSPF,
+                     NDPI_PROTOCOL_IP_IP_IN_IP,
+                     NDPI_PROTOCOL_IP_ICMPV6,
+                     NDPI_PROTOCOL_IP_PIM,
+                     NDPI_PROTOCOL_IP_VRRP);
 }
-
-#endif

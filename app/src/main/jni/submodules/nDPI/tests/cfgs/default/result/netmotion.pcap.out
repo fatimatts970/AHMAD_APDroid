@@ -1,0 +1,36 @@
+DPI Packets (UDP):	3	(3.00 pkts/flow)
+Confidence DPI              : 1 (flows)
+Num dissector calls: 171 (171.00 diss/flow)
+LRU cache ookla:      0/0/0 (insert/search/found)
+LRU cache bittorrent: 0/0/0 (insert/search/found)
+LRU cache stun:       0/0/0 (insert/search/found)
+LRU cache tls_cert:   0/0/0 (insert/search/found)
+LRU cache mining:     0/0/0 (insert/search/found)
+LRU cache msteams:    0/0/0 (insert/search/found)
+LRU cache fpc_dns:    0/1/0 (insert/search/found)
+Automa host:          0/0 (search/found)
+Automa domain:        0/0 (search/found)
+Automa tls cert:      0/0 (search/found)
+Automa risk mask:     0/0 (search/found)
+Automa common alpns:  0/0 (search/found)
+Patricia risk mask:   2/0 (search/found)
+Patricia risk mask IPv6: 0/0 (search/found)
+Patricia risk:        0/0 (search/found)
+Patricia risk IPv6:   0/0 (search/found)
+Patricia protocols:   2/0 (search/found)
+Patricia protocols IPv6: 0/0 (search/found)
+Hash malicious ja4:        0/0 (search/found)
+Hash malicious sha1:       0/0 (search/found)
+Hash TCP fingerprints:     0/0 (search/found)
+Hash public domain suffix: 0/0 (search/found)
+Hash ja4 custom protos:    0/0 (search/found)
+Hash fp custom protos:     0/0 (search/found)
+Hash url custom protos:    0/0 (search/found)
+
+NetMotion	16	2703	1
+
+Acceptable                      16 2703          1            
+
+VPN                             16 2703          1            
+
+	1	UDP 203.0.113.77:5008 <-> 192.168.80.145:63991 [proto: 477/NetMotion][Stack: NetMotion][IP: 0/Unknown][Encrypted][Confidence: DPI][FPC: 0/Unknown, Confidence: Unknown][DPI packets: 3][cat: VPN/2][Breed: Acceptable][10 pkts/1626 bytes <-> 6 pkts/1077 bytes][Goodput ratio: 74/77][0.99 sec][bytes ratio: 0.203 (Upload)][IAT c2s/s2c min/avg/max/stddev: 25/31 104/161 207/254 63/83][Pkt Len c2s/s2c min/avg/max/stddev: 66/66 163/180 280/664 83/219][Plen Bins: 38,12,0,18,0,0,18,6,0,0,0,0,0,0,0,0,0,0,0,6,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]

@@ -1,8 +1,8 @@
 /*
  * afp.c
  *
- * Copyright (C) 2009-2011 by ipoque GmbH
- * Copyright (C) 2011-16 - ntop.org
+ * Copyright (C) 2009-11 by ipoque GmbH
+ * Copyright (C) 2011-26 - ntop.org
  *
  * This file is part of nDPI, an open source deep packet inspection
  * library based on the OpenDPI and PACE technology by ipoque GmbH
@@ -23,9 +23,12 @@
  * 
  */
 
-#include "ndpi_protocols.h"
+#include "ndpi_protocol_ids.h"
 
-#ifdef NDPI_PROTOCOL_AFP
+#define NDPI_CURRENT_PROTO NDPI_PROTOCOL_AFP
+
+#include "ndpi_api.h"
+#include "ndpi_private.h"
 
 struct afpHeader {
   u_int8_t flags, command;
@@ -35,13 +38,15 @@ struct afpHeader {
 
 static void ndpi_int_afp_add_connection(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  ndpi_set_detected_protocol(ndpi_struct, flow, NDPI_PROTOCOL_AFP, NDPI_PROTOCOL_UNKNOWN);
+  ndpi_set_detected_protocol(ndpi_struct, &flow->core, NDPI_PROTOCOL_AFP, NDPI_PROTOCOL_UNKNOWN, NDPI_CONFIDENCE_DPI);
 }
 
 
-void ndpi_search_afp(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
+static void ndpi_search_afp(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  struct ndpi_packet_struct *packet = &flow->packet;
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
+
+  NDPI_LOG_DBG(ndpi_struct, "search AFP\n");
 
   if (packet->payload_packet_len >= sizeof(struct afpHeader)) {
     struct afpHeader *h = (struct afpHeader*)packet->payload;
@@ -52,20 +57,8 @@ void ndpi_search_afp(struct ndpi_detection_module_struct *ndpi_struct, struct nd
 	the initial connection, we need to discard these packets
 	as they are not an indication that this flow is not AFP	
       */
-      return;
-    }
-
-    /*
-     * this will detect the OpenSession command of the Data Stream Interface (DSI) protocol
-     * which is exclusively used by the Apple Filing Protocol (AFP) on TCP/IP networks
-     */
-    if (packet->payload_packet_len >= 22 && get_u_int16_t(packet->payload, 0) == htons(0x0004) &&
-	get_u_int16_t(packet->payload, 2) == htons(0x0001) && get_u_int32_t(packet->payload, 4) == 0 &&
-	get_u_int32_t(packet->payload, 8) == htonl(packet->payload_packet_len - 16) &&
-	get_u_int32_t(packet->payload, 12) == 0 && get_u_int16_t(packet->payload, 16) == htons(0x0104)) {
-
-      NDPI_LOG(NDPI_PROTOCOL_AFP, ndpi_struct, NDPI_LOG_DEBUG, "AFP: DSI OpenSession detected.\n");
-      ndpi_int_afp_add_connection(ndpi_struct, flow);
+      if(flow->core.packet_counter > 5)
+        NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
       return;
     }
 
@@ -73,27 +66,22 @@ void ndpi_search_afp(struct ndpi_detection_module_struct *ndpi_struct, struct nd
        && ((h->command >= 1) && (h->command <= 8))
        && (h->reserved == 0)
        && (packet->payload_packet_len >= (sizeof(struct afpHeader)+ntohl(h->length)))) {
-      NDPI_LOG(NDPI_PROTOCOL_AFP, ndpi_struct, NDPI_LOG_DEBUG, "AFP: DSI detected.\n");
+      NDPI_LOG_INFO(ndpi_struct, "found AFP: DSI\n");
       ndpi_int_afp_add_connection(ndpi_struct, flow);
       return;
     }
   }
 
-  NDPI_LOG(NDPI_PROTOCOL_AFP, ndpi_struct, NDPI_LOG_DEBUG, "AFP excluded.\n");
-  NDPI_ADD_PROTOCOL_TO_BITMASK(flow->excluded_protocol_bitmask, NDPI_PROTOCOL_AFP);
+  NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 }
 
 
-void init_afp_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
+void init_afp_dissector(struct ndpi_detection_module_struct *ndpi_struct)
 {
-  ndpi_set_bitmask_protocol_detection("AFP", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_AFP,
-				      ndpi_search_afp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_TCP_WITH_PAYLOAD_WITHOUT_RETRANSMISSION,
-				      SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-  *id += 1;
+  ndpi_register_dissector("AFP", ndpi_struct,
+                     ndpi_search_afp,
+                     NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_TCP_WITH_PAYLOAD_WITHOUT_RETRANSMISSION,
+                     DISSECTOR_LICENSE_LGPL,
+                     1, NDPI_PROTOCOL_AFP);
 }
 
-
-#endif

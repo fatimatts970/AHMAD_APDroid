@@ -1,8 +1,8 @@
 /*
  * dhcpv6.c
  *
- * Copyright (C) 2009-2011 by ipoque GmbH
- * Copyright (C) 2011-15 - ntop.org
+ * Copyright (C) 2009-11 - ipoque GmbH
+ * Copyright (C) 2011-26 - ntop.org
  *
  * This file is part of nDPI, an open source deep packet inspection
  * library based on the OpenDPI and PACE technology by ipoque GmbH
@@ -22,51 +22,49 @@
  *
  */
 
+#include "ndpi_protocol_ids.h"
 
+#define NDPI_CURRENT_PROTO NDPI_PROTOCOL_DHCPV6
 
-/* include files */
+#include "ndpi_api.h"
+#include "ndpi_private.h"
 
-#include "ndpi_protocols.h"
-#ifdef NDPI_PROTOCOL_DHCPV6
 
 static void ndpi_int_dhcpv6_add_connection(struct ndpi_detection_module_struct *ndpi_struct,
-					   struct ndpi_flow_struct *flow)
-{
-
-  ndpi_set_detected_protocol(ndpi_struct, flow, NDPI_PROTOCOL_DHCPV6, NDPI_PROTOCOL_UNKNOWN);
+                                           struct ndpi_flow_struct *flow) {
+  ndpi_set_detected_protocol(ndpi_struct, &flow->core, NDPI_PROTOCOL_DHCPV6,
+                             NDPI_PROTOCOL_UNKNOWN, NDPI_CONFIDENCE_DPI);
 }
 
-void ndpi_search_dhcpv6_udp(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
-{
-	struct ndpi_packet_struct *packet = &flow->packet;
-	
-//  struct ndpi_id_struct         *src=ndpi_struct->src;
-//  struct ndpi_id_struct         *dst=ndpi_struct->dst;
+static void ndpi_search_dhcpv6_udp(struct ndpi_detection_module_struct *ndpi_struct,
+                                   struct ndpi_flow_struct *flow) {
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
 
-	if (packet->payload_packet_len >= 4 &&
-		(packet->udp->source == htons(546) || packet->udp->source == htons(547)) &&
-		(packet->udp->dest == htons(546) || packet->udp->dest == htons(547)) &&
-		packet->payload[0] >= 1 && packet->payload[0] <= 13) {
+  NDPI_LOG_DBG(ndpi_struct, "search DHCPv6\n");
 
-		NDPI_LOG(NDPI_PROTOCOL_DHCPV6, ndpi_struct, NDPI_LOG_DEBUG, "DHCPv6 detected.\n");
-		ndpi_int_dhcpv6_add_connection(ndpi_struct, flow);
-		return;
-	}
+  /*
+   * DHCPv6 (RFC 3315) uses UDP port 546 (client) and 547 (server).
+   * A valid message is at least 4 bytes: 1 byte message-type + 3 bytes
+   * transaction-id.  Message types 1-13 are defined by the standard.
+   */
+  if(packet->payload_packet_len >= 4 &&
+     (packet->udp->source == htons(546) || packet->udp->source == htons(547)) &&
+     (packet->udp->dest   == htons(546) || packet->udp->dest   == htons(547)) &&
+     packet->payload[0] >= 1 && packet->payload[0] <= 13) {
 
-	NDPI_LOG(NDPI_PROTOCOL_DHCPV6, ndpi_struct, NDPI_LOG_DEBUG, "DHCPv6 excluded.\n");
-	NDPI_ADD_PROTOCOL_TO_BITMASK(flow->excluded_protocol_bitmask, NDPI_PROTOCOL_DHCPV6);
+    NDPI_LOG_INFO(ndpi_struct, "found DHCPv6\n");
+    ndpi_int_dhcpv6_add_connection(ndpi_struct, flow);
+    return;
+  }
+
+  NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 }
 
 
-void init_dhcpv6_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
-{
-  ndpi_set_bitmask_protocol_detection("DHCPV6", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_DHCPV6,
-				      ndpi_search_dhcpv6_udp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_V6_UDP_WITH_PAYLOAD,
-				      SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-  *id += 1;
+void init_dhcpv6_dissector(struct ndpi_detection_module_struct *ndpi_struct) {
+  ndpi_register_dissector("DHCPV6", ndpi_struct,
+                          ndpi_search_dhcpv6_udp,
+                          NDPI_SELECTION_BITMASK_PROTOCOL_V6_UDP_WITH_PAYLOAD,
+                          DISSECTOR_LICENSE_LGPL,
+                          1, NDPI_PROTOCOL_DHCPV6);
 }
-
-#endif

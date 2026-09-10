@@ -1,8 +1,8 @@
 /*
  * iax.c
  *
- * Copyright (C) 2009-2011 by ipoque GmbH
- * Copyright (C) 2011-15 - ntop.org
+ * Copyright (C) 2009-11 - ipoque GmbH
+ * Copyright (C) 2011-26 - ntop.org
  *
  * This file is part of nDPI, an open source deep packet inspection
  * library based on the OpenDPI and PACE technology by ipoque GmbH
@@ -23,20 +23,24 @@
  */
 
 
-#include "ndpi_protocols.h"
+#include "ndpi_protocol_ids.h"
 
-#ifdef NDPI_PROTOCOL_IAX
+#define NDPI_CURRENT_PROTO NDPI_PROTOCOL_IAX
+
+#include "ndpi_api.h"
+#include "ndpi_private.h"
+
 
 #define NDPI_IAX_MAX_INFORMATION_ELEMENTS 15
 
 static void ndpi_int_iax_add_connection(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  ndpi_set_detected_protocol(ndpi_struct, flow, NDPI_PROTOCOL_IAX, NDPI_PROTOCOL_UNKNOWN);
+  ndpi_set_detected_protocol(ndpi_struct, &flow->core, NDPI_PROTOCOL_IAX, NDPI_PROTOCOL_UNKNOWN, NDPI_CONFIDENCE_DPI);
 }
 
 static void ndpi_search_setup_iax(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  struct ndpi_packet_struct *packet = &flow->packet;
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
   u_int8_t i;
   u_int16_t packet_len;
 
@@ -58,52 +62,45 @@ static void ndpi_search_setup_iax(struct ndpi_detection_module_struct *ndpi_stru
       && packet->payload[11] <= 15) {
 
     if (packet->payload_packet_len == 12) {
-      NDPI_LOG(NDPI_PROTOCOL_IAX, ndpi_struct, NDPI_LOG_DEBUG, "found IAX.\n");
+      NDPI_LOG_INFO(ndpi_struct, "found IAX\n");
       ndpi_int_iax_add_connection(ndpi_struct, flow);
       return;
     }
+
     packet_len = 12;
-    for (i = 0; i < NDPI_IAX_MAX_INFORMATION_ELEMENTS; i++) {
+    for(i = 0; i < NDPI_IAX_MAX_INFORMATION_ELEMENTS; i++) {
+      if ((packet_len+1) >= packet->payload_packet_len)
+	break;      
+
       packet_len = packet_len + 2 + packet->payload[packet_len + 1];
-      if (packet_len == packet->payload_packet_len) {
-	NDPI_LOG(NDPI_PROTOCOL_IAX, ndpi_struct, NDPI_LOG_DEBUG, "found IAX.\n");
+      if(packet_len == packet->payload_packet_len) {
+	NDPI_LOG_INFO(ndpi_struct, "found IAX\n");
 	ndpi_int_iax_add_connection(ndpi_struct, flow);
 	return;
-      }
-      if (packet_len > packet->payload_packet_len) {
-	break;
       }
     }
 
   }
 
-  NDPI_ADD_PROTOCOL_TO_BITMASK(flow->excluded_protocol_bitmask, NDPI_PROTOCOL_IAX);
+  NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 
 }
 
-void ndpi_search_iax(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
+static void ndpi_search_iax(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  struct ndpi_packet_struct *packet = &flow->packet;
-  //      struct ndpi_flow_struct       *flow=ndpi_struct->flow;
-  //      struct ndpi_id_struct         *src=ndpi_struct->src;
-  //      struct ndpi_id_struct         *dst=ndpi_struct->dst;
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
 
   if(packet->udp 
-     && (packet->detected_protocol_stack[0] == NDPI_PROTOCOL_UNKNOWN))
+     && (flow->core.detected_protocol_stack[0] == NDPI_PROTOCOL_UNKNOWN))
     ndpi_search_setup_iax(ndpi_struct, flow);
 }
 
 
-void init_iax_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
+void init_iax_dissector(struct ndpi_detection_module_struct *ndpi_struct)
 {
-  ndpi_set_bitmask_protocol_detection("IAX", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_IAX,
-				      ndpi_search_iax,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_UDP_WITH_PAYLOAD,
-				      SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-
-  *id += 1;
+  ndpi_register_dissector("IAX", ndpi_struct,
+                     ndpi_search_iax,
+                     NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_UDP_WITH_PAYLOAD,
+                     DISSECTOR_LICENSE_LGPL,
+                     1, NDPI_PROTOCOL_IAX);
 }
-
-#endif

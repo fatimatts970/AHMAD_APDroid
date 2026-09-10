@@ -19,47 +19,64 @@
  */
 
 
-#include "ndpi_protocols.h"
+#include "ndpi_protocol_ids.h"
 
-#ifdef NDPI_PROTOCOL_UBNTAC2
+#define NDPI_CURRENT_PROTO NDPI_PROTOCOL_UBNTAC2
+
+#include "ndpi_api.h"
+#include "ndpi_private.h"
 
 static void ndpi_int_ubntac2_add_connection(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  ndpi_set_detected_protocol(ndpi_struct, flow, NDPI_PROTOCOL_UBNTAC2, NDPI_PROTOCOL_UNKNOWN);
+  ndpi_set_detected_protocol(ndpi_struct, &flow->core, NDPI_PROTOCOL_UBNTAC2, NDPI_PROTOCOL_UNKNOWN, NDPI_CONFIDENCE_DPI);
 }
 
 
-void ndpi_search_ubntac2(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
+static void ndpi_search_ubntac2(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  struct ndpi_packet_struct *packet = &flow->packet;
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
+  u_int8_t tlv_type;
+  u_int16_t tlv_length, version_len;
+  int off;
 
-  NDPI_LOG(NDPI_PROTOCOL_UBNTAC2, ndpi_struct, NDPI_LOG_TRACE, "UBNTAC2 detection... plen:%i %i:%i\n", packet->payload_packet_len, ntohs(packet->udp->source), ntohs(packet->udp->dest));
+  NDPI_LOG_DBG(ndpi_struct, "search ubntac2\n");
 
-  if(packet->udp) {
-    if(packet->payload_packet_len >= 135 &&
-       (packet->udp->source == htons(10001) || packet->udp->dest == htons(10001)) &&
-       memcmp(&(packet->payload[36]), "UBNT", 4) == 0) {
-      
-      NDPI_LOG(NDPI_PROTOCOL_UBNTAC2, ndpi_struct, NDPI_LOG_DEBUG, "UBNT AirControl 2 request\n");
-      
-      ndpi_int_ubntac2_add_connection(ndpi_struct, flow);
-      return;
+  if(packet->payload_packet_len >= 4 &&
+     (packet->udp->source == htons(10001) || packet->udp->dest == htons(10001)) &&
+     (ntohs(get_u_int16_t(packet->payload, 0)) == 0x0206 ||
+      ntohs(get_u_int16_t(packet->payload, 0)) == 0x0100 /* discovery request/reply */) &&
+     (4 + ntohs(*(u_int16_t *)&packet->payload[2]) == packet->payload_packet_len)) {
+    NDPI_LOG_INFO(ndpi_struct, "UBNT AirControl 2 request\n");
+    ndpi_int_ubntac2_add_connection(ndpi_struct, flow);
+
+    /* Parse TLV list: 1 byte type + 2 byte length + (optional) data */
+    off = 4;
+    while (off + 3 < packet->payload_packet_len) {
+      tlv_type = packet->payload[off];
+      tlv_length = ntohs(*(u_int16_t *)&packet->payload[off + 1]);
+
+      NDPI_LOG_DBG2(ndpi_struct, "0x%x Len %d\n", tlv_type, tlv_length);
+
+      if(tlv_type == 0x03 && off + 3 + tlv_length < packet->payload_packet_len) {
+	version_len = ndpi_min(sizeof(flow->metadata.protos.ubntac2.version) - 1, tlv_length);
+	memcpy(flow->metadata.protos.ubntac2.version, (const char *)&packet->payload[off + 3], version_len);
+	flow->metadata.protos.ubntac2.version[version_len] = '\0';
+      }
+
+      off += 3 + tlv_length;
     }
+    return;
   }
 
-  NDPI_ADD_PROTOCOL_TO_BITMASK(flow->excluded_protocol_bitmask, NDPI_PROTOCOL_UBNTAC2);
+  NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 }
 
 
-void init_ubntac2_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
+void init_ubntac2_dissector(struct ndpi_detection_module_struct *ndpi_struct)
 {
-  ndpi_set_bitmask_protocol_detection("UBNTAC2", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_UBNTAC2,
-				      ndpi_search_ubntac2,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_UDP_WITH_PAYLOAD,
-				      SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-  *id += 1;
+  ndpi_register_dissector("UBNTAC2", ndpi_struct,
+                     ndpi_search_ubntac2,
+                     NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_UDP_WITH_PAYLOAD,
+                     DISSECTOR_LICENSE_LGPL,
+                     1, NDPI_PROTOCOL_UBNTAC2);
 }
-
-#endif

@@ -1,8 +1,8 @@
 /*
  * nfs.c
  *
- * Copyright (C) 2009-2011 by ipoque GmbH
- * Copyright (C) 2011-15 - ntop.org
+ * Copyright (C) 2009-11 - ipoque GmbH
+ * Copyright (C) 2011-26 - ntop.org
  *
  * This file is part of nDPI, an open source deep packet inspection
  * library based on the OpenDPI and PACE technology by ipoque GmbH
@@ -23,22 +23,25 @@
  */
 
 
-#include "ndpi_protocols.h"
+#include "ndpi_protocol_ids.h"
 
-#ifdef NDPI_PROTOCOL_NFS
+#define NDPI_CURRENT_PROTO NDPI_PROTOCOL_NFS
+
+#include "ndpi_api.h"
+#include "ndpi_private.h"
+
 
 static void ndpi_int_nfs_add_connection(struct ndpi_detection_module_struct
 					*ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  ndpi_set_detected_protocol(ndpi_struct, flow, NDPI_PROTOCOL_NFS, NDPI_PROTOCOL_UNKNOWN);
+  ndpi_set_detected_protocol(ndpi_struct, &flow->core, NDPI_PROTOCOL_NFS, NDPI_PROTOCOL_UNKNOWN, NDPI_CONFIDENCE_DPI);
 }
 
-void ndpi_search_nfs(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
+static void ndpi_search_nfs(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-	struct ndpi_packet_struct *packet = &flow->packet;
+	struct ndpi_packet_struct *packet = &ndpi_struct->packet;
 	
-//      struct ndpi_id_struct         *src=ndpi_struct->src;
-//      struct ndpi_id_struct         *dst=ndpi_struct->dst;
+	NDPI_LOG_DBG(ndpi_struct, "search NFS\n");
 
 	u_int8_t offset = 0;
 	if (packet->tcp != NULL)
@@ -47,54 +50,50 @@ void ndpi_search_nfs(struct ndpi_detection_module_struct *ndpi_struct, struct nd
 	if (packet->payload_packet_len < (40 + offset))
 		goto exclude_nfs;
 
-	NDPI_LOG(NDPI_PROTOCOL_NFS, ndpi_struct, NDPI_LOG_DEBUG, "NFS user match stage 1\n");
+	NDPI_LOG_DBG2(ndpi_struct, "NFS user match stage 1\n");
 
 
 	if (offset != 0 && get_u_int32_t(packet->payload, 0) != htonl(0x80000000 + packet->payload_packet_len - 4))
 		goto exclude_nfs;
 
-	NDPI_LOG(NDPI_PROTOCOL_NFS, ndpi_struct, NDPI_LOG_DEBUG, "NFS user match stage 2\n");
+	NDPI_LOG_DBG2(ndpi_struct, "NFS user match stage 2\n");
 
 	if (get_u_int32_t(packet->payload, 4 + offset) != 0)
 		goto exclude_nfs;
 
-	NDPI_LOG(NDPI_PROTOCOL_NFS, ndpi_struct, NDPI_LOG_DEBUG, "NFS user match stage 3\n");
+	NDPI_LOG_DBG2(ndpi_struct, "NFS user match stage 3\n");
 
 	if (get_u_int32_t(packet->payload, 8 + offset) != htonl(0x02))
 		goto exclude_nfs;
 
-	NDPI_LOG(NDPI_PROTOCOL_NFS, ndpi_struct, NDPI_LOG_DEBUG, "NFS match stage 3\n");
+	NDPI_LOG_DBG2(ndpi_struct, "NFS match stage 3\n");
 
 	if (get_u_int32_t(packet->payload, 12 + offset) != htonl(0x000186a5)
 		&& get_u_int32_t(packet->payload, 12 + offset) != htonl(0x000186a3)
 		&& get_u_int32_t(packet->payload, 12 + offset) != htonl(0x000186a0))
 		goto exclude_nfs;
 
-	NDPI_LOG(NDPI_PROTOCOL_NFS, ndpi_struct, NDPI_LOG_DEBUG, "NFS match stage 4\n");
+	NDPI_LOG_DBG2(ndpi_struct, "NFS match stage 4\n");
 
 	if (ntohl(get_u_int32_t(packet->payload, 16 + offset)) > 4)
 		goto exclude_nfs;
 
-	NDPI_LOG(NDPI_PROTOCOL_NFS, ndpi_struct, NDPI_LOG_DEBUG, "NFS match\n");
+	NDPI_LOG_INFO(ndpi_struct, "found NFS\n");
 
 	ndpi_int_nfs_add_connection(ndpi_struct, flow);
 	return;
 
   exclude_nfs:
-	NDPI_ADD_PROTOCOL_TO_BITMASK(flow->excluded_protocol_bitmask, NDPI_PROTOCOL_NFS);
+	NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 }
 
 
-void init_nfs_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
+void init_nfs_dissector(struct ndpi_detection_module_struct *ndpi_struct)
 {
-  ndpi_set_bitmask_protocol_detection("NFS", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_NFS,
-				      ndpi_search_nfs,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_TCP_OR_UDP_WITH_PAYLOAD_WITHOUT_RETRANSMISSION,
-				      SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-
-  *id += 1;
+  ndpi_register_dissector("NFS", ndpi_struct,
+                     ndpi_search_nfs,
+                     NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_TCP_OR_UDP_WITH_PAYLOAD_WITHOUT_RETRANSMISSION,
+                     DISSECTOR_LICENSE_LGPL,
+                     1, NDPI_PROTOCOL_NFS);
 }
 
-#endif

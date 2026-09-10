@@ -2,7 +2,7 @@
  * megaco.c 
  *
  * Copyright (C) 2014 by Gianluca Costa http://www.capanalysis.net
- * Copyright (C) 2012-15 - ntop.org
+ * Copyright (C) 2012-22 - ntop.org
  *
  * This module is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -18,44 +18,44 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "ndpi_protocol_ids.h"
+
+#define NDPI_CURRENT_PROTO NDPI_PROTOCOL_MEGACO
 
 #include "ndpi_api.h"
+#include "ndpi_private.h"
 
-#ifdef NDPI_PROTOCOL_MEGACO
 
-void ndpi_search_megaco(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
+static void ndpi_search_megaco(struct ndpi_detection_module_struct *ndpi_struct,
+			       struct ndpi_flow_struct *flow)
 {
-  struct ndpi_packet_struct *packet = &flow->packet;
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
   
-  NDPI_LOG(NDPI_PROTOCOL_MEGACO, ndpi_struct, NDPI_LOG_DEBUG, "search for MEGACO.\n");
+  NDPI_LOG_DBG(ndpi_struct, "search for MEGACO\n");
   
   if(packet->udp != NULL) {
     if((packet->payload_packet_len > 4 && packet->payload[0] == '!' && packet->payload[1] == '/' &&
-        packet->payload[2] == '1' && packet->payload[3] == ' ' && packet->payload[4] == '[')
+        packet->payload[2] == '1' && packet->payload[3] == ' ' &&
+        (packet->payload[4] == '[' || packet->payload[4] == '<'))
        || (packet->payload_packet_len > 9 && packet->payload[0] == 'M' && packet->payload[1] == 'E' &&
         packet->payload[2] == 'G' && packet->payload[3] == 'A' && packet->payload[4] == 'C' &&
         packet->payload[5] == 'O' && packet->payload[6] == '/' &&
         packet->payload[7] == '1' && packet->payload[8] == ' ' && packet->payload[9] == '[')) {
-      NDPI_LOG(NDPI_PROTOCOL_MEGACO, ndpi_struct, NDPI_LOG_DEBUG, "found MEGACO.\n");
-      ndpi_set_detected_protocol(ndpi_struct, flow, NDPI_PROTOCOL_MEGACO, NDPI_PROTOCOL_UNKNOWN);
+      NDPI_LOG_INFO(ndpi_struct, "found MEGACO\n");
+      ndpi_set_detected_protocol(ndpi_struct, &flow->core, NDPI_PROTOCOL_MEGACO, NDPI_PROTOCOL_UNKNOWN, NDPI_CONFIDENCE_DPI);
       return;
     } 
   }
 
-  NDPI_LOG(NDPI_PROTOCOL_MEGACO, ndpi_struct, NDPI_LOG_DEBUG, "exclude MEGACO.\n");
-  NDPI_ADD_PROTOCOL_TO_BITMASK(flow->excluded_protocol_bitmask, NDPI_PROTOCOL_MEGACO);
+  NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 }
 
 
-void init_megaco_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
+void init_megaco_dissector(struct ndpi_detection_module_struct *ndpi_struct)
 {
-  ndpi_set_bitmask_protocol_detection("Megaco", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_MEGACO,
-				      ndpi_search_megaco,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_UDP_WITH_PAYLOAD,
-				      SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-
-  *id += 1;
+  ndpi_register_dissector("Megaco", ndpi_struct,
+                     ndpi_search_megaco,
+                     NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_UDP_WITH_PAYLOAD,
+                      DISSECTOR_LICENSE_LGPL,
+                      1, NDPI_PROTOCOL_MEGACO);
 }
-#endif

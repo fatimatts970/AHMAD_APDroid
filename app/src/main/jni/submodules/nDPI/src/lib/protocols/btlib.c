@@ -1,7 +1,7 @@
 /*
  * btlib.c
  *
- * Copyright (C) 2011-15 - ntop.org
+ * Copyright (C) 2011-26 - ntop.org
  *               Contributed by Vitaly Lavrov <vel21ripn@gmail.com>
  *
  * This file is part of nDPI, an open source deep packet inspection
@@ -22,74 +22,35 @@
  *
  */
 
+#include "ndpi_api.h"
+#if 0
 #ifndef NDPI_NO_STD_INC
 #include <stdlib.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <string.h>
+#include <unistd.h>
+#include <unistd.h>
 #include <strings.h>
 
+/*
 typedef unsigned char u_int8_t;
 typedef unsigned short int u_int16_t;
 typedef unsigned long long int u_int64_t;
+*/
 
 #include <stdint.h>
 #include <stdlib.h>
+#ifndef WIN32
 #include <arpa/inet.h>
 #endif
-
-typedef signed long long int i_int64_t;
+#endif
+#endif
 
 #include "btlib.h"
 
 int bt_parse_debug = 0;
 
-static char *printXb(char *s,const u_int8_t *b,int l) {
-  int i;
-  for(i=0; i < l; i++)
-    snprintf(&s[i*2],41,"%02x",b[i]);
-  return s;
-}
-
-static char *print20b(char *s,const u_int8_t *b) {
-  snprintf(s,41,"%08x%08x%08x%08x%08x",
-	   htonl(*(u_int32_t*)b),
-	   htonl(*(u_int32_t*)(b+4)),
-	   htonl(*(u_int32_t*)(b+8)),
-	   htonl(*(u_int32_t*)(b+12)),
-	   htonl(*(u_int32_t*)(b+16)));
-  return s;
-}
-
-static char *print_id_ip_p(char *s, const struct bt_nodes_data *b) {
-  u_int8_t *p = (void*)b;
-  print20b(s,b->id);
-  snprintf(s+40,39," %d.%d.%d.%d:%u",
-	   p[20], p[21], p[22], p[23], htons(b->port));
-  return s;
-}
-
-static char *print_ip_p(char *s, const struct bt_ipv4p *b,int np) {
-  const u_int8_t *p = (const void*)b;
-  snprintf(s,39,!np ? "%d.%d.%d.%d:%u":"%d.%d.%d.%d",
-	   p[0], p[1], p[2], p[3], htons(b->port));
-  return s;
-}
-
-static char *print_ip6_p(char *s, const struct bt_ipv6p *b,int np) {
-  u_int16_t *p = (void*)b;
-  snprintf(s,79,!np ? "%x:%x:%x:%x:%x:%x:%x:%x.%u":"%x:%x:%x:%x:%x:%x:%x:%x",
-	   htons(p[0]), htons(p[1]), htons(p[2]), htons(p[3]),
-	   htons(p[4]), htons(p[5]), htons(p[6]), htons(p[7]),
-	   htons(b->port));
-  return s;
-}
-
-static char *print_id_ip6_p(char *s,const struct bt_nodes6_data *b) {
-  return print_ip6_p(s,(struct bt_ipv6p *)&b->ip,0);
-}
-
-
+#if 0
 void dump_bt_proto_struct(struct bt_parse_protocol *p) {
   char b20h[128];
   int i;
@@ -155,7 +116,9 @@ void dump_bt_proto_struct(struct bt_parse_protocol *p) {
   if(p->interval) printf("\tinterval\t%d\n",p->interval);
   if(p->min_interval) printf("\tmin interval\t%d\n",p->min_interval);
 }
+#endif
 
+#ifdef BTLIB_DEBUG
 static void _print_safe_str(char *msg,char *k,const u_int8_t *s,size_t l) {
   static const char *th="0123456789abcdef?";
   char *buf = (char*)ndpi_malloc((size_t)(l*3+2));
@@ -181,12 +144,17 @@ static void _print_safe_str(char *msg,char *k,const u_int8_t *s,size_t l) {
 static void print_safe_str(char *msg,bt_parse_data_cb_t *cbd) {
   _print_safe_str(msg,cbd->buf,cbd->v.s.s,cbd->v.s.l);
 }
-
 #define DEBUG_TRACE(cmd) { if(bt_parse_debug) cmd; }
+
+#else
+#define DEBUG_TRACE(cmd) ;
+#endif
+
+
 #define STREQ(a,b) !strcmp(a,b)
 
 
-void cb_data(bt_parse_data_cb_t *cbd,int *ret) {
+void cb_data(bt_parse_data_cb_t *cbd) {
   struct bt_parse_protocol *p = &(cbd->p);
   const u_int8_t *s;
   const char *ss;
@@ -194,8 +162,7 @@ void cb_data(bt_parse_data_cb_t *cbd,int *ret) {
   if(cbd->t == 0)  return;
 
   if(cbd->t == 1) {
-
-    DEBUG_TRACE(printf("%s %lld\n",cbd->buf,cbd->v.i));
+    DEBUG_TRACE(printf("%s %lld\n",cbd->buf, (long long)cbd->v.i));
 
     if(STREQ(cbd->buf,"a.port")) {
       p->a.port = (u_int16_t)(cbd->v.i & 0xffff);
@@ -224,7 +191,7 @@ void cb_data(bt_parse_data_cb_t *cbd,int *ret) {
       p->h_mint = 1;
       return;
     }
-    DEBUG_TRACE(printf("UNKNOWN %s %lld\n",cbd->buf,cbd->v.i));
+    DEBUG_TRACE(printf("UNKNOWN %s %lld\n",cbd->buf, (long long)cbd->v.i));
     return;
   }
   if(cbd->t != 2) {
@@ -396,22 +363,22 @@ void cb_data(bt_parse_data_cb_t *cbd,int *ret) {
     return;
   }
 
-  if(cbd->buf[0] == 'e' && !cbd->buf[0]) {
+  if(cbd->buf[0] == 'e') {
     p->e_msg = s;
     p->e_len = cbd->v.s.l;
     return;
   }
-  // DEBUG_TRACE(print_safe_str("UKNOWN",cbd));
+  // DEBUG_TRACE(print_safe_str("UNKNOWN",cbd));
 }
 
 
 const u_int8_t *bt_decode(const u_int8_t *b, size_t *l, int *ret, bt_parse_data_cb_t *cbd) {
 
   unsigned int n=0,neg=0;
-  i_int64_t d = 0;
-  register u_int8_t c;
+  int64_t d = 0;
+  u_int8_t c;
 
-  if(*l == 0) return NULL;
+  if(!l || *l == 0) return NULL;
   if(cbd->level > BDEC_MAXDEPT) goto bad_data;
   c = *b++; (*l)--;
   if(c == 'i') { // integer
@@ -452,7 +419,7 @@ const u_int8_t *bt_decode(const u_int8_t *b, size_t *l, int *ret, bt_parse_data_
       if(c != ':') goto bad_data;
       break;
     }
-    if(d > *l) goto bad_data;
+    if((size_t)d > *l) goto bad_data;
     cbd->t = 2;
     cbd->v.s.s = b;
     cbd->v.s.l = d;
@@ -465,7 +432,7 @@ const u_int8_t *bt_decode(const u_int8_t *b, size_t *l, int *ret, bt_parse_data_
     do {
       b = bt_decode(b,l,ret,cbd);
       if(*ret < 0 || *l == 0) goto bad_data;
-      cb_data(cbd,ret);
+      cb_data(cbd);
       if(*ret < 0) goto bad_data;
       cbd->t = 0;
     } while (*b != 'e' && *l != 0);
@@ -488,16 +455,17 @@ const u_int8_t *bt_decode(const u_int8_t *b, size_t *l, int *ret, bt_parse_data_
       }
       b = bt_decode(b,l,ret,cbd);
       if(*ret < 0 || *l == 0) goto bad_data;
-      cb_data(cbd,ret);
+      cb_data(cbd);
       if(*ret < 0) goto bad_data;
       cbd->t = 0;
       *ls = 0;
-    } while (*b != 'e' && l != 0);
+    } while (*b != 'e' && *l != 0);
 
     b++; (*l)--;
     cbd->level--;
     return b;
   }
+
  bad_data:
   *ret=-1;
   return b;

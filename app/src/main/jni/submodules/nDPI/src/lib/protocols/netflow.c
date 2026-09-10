@@ -1,7 +1,7 @@
 /*
  * netflow.c
  *
- * Copyright (C) 2011-15 - ntop.org
+ * Copyright (C) 2011-26 - ntop.org
  *
  * nDPI is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -18,10 +18,13 @@
  *
  */
 
+#include "ndpi_protocol_ids.h"
+
+#define NDPI_CURRENT_PROTO NDPI_PROTOCOL_NETFLOW
 
 #include "ndpi_api.h"
+#include "ndpi_private.h"
 
-#ifdef NDPI_PROTOCOL_NETFLOW
 
 #ifdef WIN32
 extern int gettimeofday(struct timeval * tp, struct timezone * tzp);
@@ -95,13 +98,15 @@ struct flow_ver7_rec {
   u_int32_t router_sc;  /* Router which is shortcut by switch */
 };
 
-static void ndpi_check_netflow(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
+static void ndpi_search_netflow(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  struct ndpi_packet_struct *packet = &flow->packet;
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
   // const u_int8_t *packet_payload = packet->payload;
   u_int32_t payload_len = packet->payload_packet_len;
   time_t now;
   struct timeval now_tv;
+
+  NDPI_LOG_DBG(ndpi_struct, "search netflow\n");
 
   if((packet->udp != NULL) && (payload_len >= 24)) {
     u_int16_t version = (packet->payload[0] << 8) + packet->payload[1], uptime_offset;
@@ -113,41 +118,51 @@ static void ndpi_check_netflow(struct ndpi_detection_module_struct *ndpi_struct,
     case 5:
     case 7:
     case 9:
-      if((n == 0) || (n > 30))
+      if((n == 0) || (n > 30)) {
+	NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 	return;
-
+      }
+      
       switch(version) {
       case 1:
 	expected_len = n * sizeof(struct flow_ver1_rec) + 16 /* header */;
 	break;
+
       case 5:
 	expected_len = n * sizeof(struct flow_ver5_rec) + 24 /* header */;
 	break;
+
       case 7:
 	expected_len = n * sizeof(struct flow_ver7_rec) + 24 /* header */;
 	break;
+
       case 9:
 	/* We need to check the template */
 	break;
       }
 
       if((expected_len > 0) && (expected_len != payload_len)) {
-	NDPI_ADD_PROTOCOL_TO_BITMASK(flow->excluded_protocol_bitmask, NDPI_PROTOCOL_NETFLOW);
+	NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 	return;
       }
 
       uptime_offset = 8;
       break;
+
     case 10: /* IPFIX */
       {      
 	u_int16_t ipfix_len = n;
 
-	if(ipfix_len != payload_len)
+	if(ipfix_len != payload_len) {
+	  NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 	  return;
+	}
       }    
       uptime_offset = 4;
       break;
+      
     default:
+      NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
       return;
     }
 
@@ -158,31 +173,21 @@ static void ndpi_check_netflow(struct ndpi_detection_module_struct *ndpi_struct,
     now = now_tv.tv_sec;
 
     if(((version == 1) && (when == 0))
-       || ((when >= 946684800 /* 1/1/2000 */) && (when <= now))) {
-      NDPI_LOG(NDPI_PROTOCOL_NETFLOW, ndpi_struct, NDPI_LOG_DEBUG, "Found netflow.\n");
-      ndpi_set_detected_protocol(ndpi_struct, flow, NDPI_PROTOCOL_NETFLOW, NDPI_PROTOCOL_UNKNOWN);
+       || ((when >= 946684800 /* 1/1/2000 */) && (when <= (u_int32_t)now))) {
+      NDPI_LOG_INFO(ndpi_struct, "found netflow\n");
+      ndpi_set_detected_protocol(ndpi_struct, &flow->core, NDPI_PROTOCOL_NETFLOW, NDPI_PROTOCOL_UNKNOWN, NDPI_CONFIDENCE_DPI);
       return;
     }
-  }
+  } else
+    NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 }
 
-void ndpi_search_netflow(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
+void init_netflow_dissector(struct ndpi_detection_module_struct *ndpi_struct)
 {
-  NDPI_LOG(NDPI_PROTOCOL_NETFLOW, ndpi_struct, NDPI_LOG_DEBUG, "netflow detection...\n");
-  ndpi_check_netflow(ndpi_struct, flow);
+  ndpi_register_dissector("NetFlow", ndpi_struct,
+                     ndpi_search_netflow,
+                     NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_UDP_WITH_PAYLOAD,
+                     DISSECTOR_LICENSE_LGPL,
+                     1, NDPI_PROTOCOL_NETFLOW);
 }
 
-
-void init_netflow_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
-{
-  ndpi_set_bitmask_protocol_detection("NetFlow", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_NETFLOW,
-				      ndpi_search_netflow,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_UDP_WITH_PAYLOAD,
-				      SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-
-  *id += 1;
-}
-
-#endif

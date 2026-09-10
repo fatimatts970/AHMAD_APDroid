@@ -2,7 +2,7 @@
  * mpegts.c (MPEG Transport Stream)
  *          https://en.wikipedia.org/wiki/MPEG_transport_stream
  *
- * Copyright (C) 2015 - ntop.org
+ * Copyright (C) 2015-22 - ntop.org
  *
  * nDPI is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -19,16 +19,18 @@
  *
  */
 
+#include "ndpi_protocol_ids.h"
+
+#define NDPI_CURRENT_PROTO NDPI_PROTOCOL_MPEGTS
 
 #include "ndpi_api.h"
+#include "ndpi_private.h"
 
-#ifdef NDPI_PROTOCOL_MPEGTS
-
-void ndpi_search_mpegts(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
+static void ndpi_search_mpegts(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  struct ndpi_packet_struct *packet = &flow->packet;
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
 
-  NDPI_LOG(NDPI_PROTOCOL_MPEGTS, ndpi_struct, NDPI_LOG_DEBUG, "search for MPEGTS.\n");
+  NDPI_LOG_DBG(ndpi_struct, "search MPEGTS\n");
 
   if((packet->udp != NULL) && ((packet->payload_packet_len % 188) == 0)) {
     u_int i, num_chunks = packet->payload_packet_len / 188;
@@ -40,26 +42,22 @@ void ndpi_search_mpegts(struct ndpi_detection_module_struct *ndpi_struct, struct
     }
 
     /* This looks MPEG TS */
-    ndpi_set_detected_protocol(ndpi_struct, flow, NDPI_PROTOCOL_MPEGTS, NDPI_PROTOCOL_UNKNOWN);
+    NDPI_LOG_INFO(ndpi_struct, "found MPEGTS\n");
+    ndpi_set_detected_protocol(ndpi_struct, &flow->core, NDPI_PROTOCOL_MPEGTS, NDPI_PROTOCOL_UNKNOWN, NDPI_CONFIDENCE_DPI);
     return;
   }    
 
  no_mpegts:
-  NDPI_LOG(NDPI_PROTOCOL_MPEGTS, ndpi_struct, NDPI_LOG_DEBUG, "Excluded MPEGTS.\n");
-  NDPI_ADD_PROTOCOL_TO_BITMASK(flow->excluded_protocol_bitmask, NDPI_PROTOCOL_MPEGTS);
+  NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 }
 
 
-void init_mpegts_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
+void init_mpegts_dissector(struct ndpi_detection_module_struct *ndpi_struct)
 {
-  ndpi_set_bitmask_protocol_detection("MPEG_TS", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_MPEGTS,
-				      ndpi_search_mpegts,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_UDP_WITH_PAYLOAD,
-				      SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-
-  *id += 1;
+  ndpi_register_dissector("MPEG_TS", ndpi_struct,
+                     ndpi_search_mpegts,
+                     NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_UDP_WITH_PAYLOAD,
+                      DISSECTOR_LICENSE_LGPL,
+                      1, NDPI_PROTOCOL_MPEGTS);
 }
 
-#endif

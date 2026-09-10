@@ -1,8 +1,9 @@
 /*
  * mysql.c
  * 
- * Copyright (C) 2009-2011 by ipoque GmbH
- * Copyright (C) 2011-15 - ntop.org
+ * Copyright (C) 2009-11 - ipoque GmbH
+ * Copyright (C) 2011-26 - ntop.org
+ * Copyright (C) 2024 - V.G <v.gavrilov@securitycode.ru>
  *
  * This file is part of nDPI, an open source deep packet inspection
  * library based on the OpenDPI and PACE technology by ipoque GmbH
@@ -23,62 +24,49 @@
  */
 
 
-#include "ndpi_protocols.h"
+#include "ndpi_protocol_ids.h"
 
-#ifdef NDPI_PROTOCOL_MYSQL
+#define NDPI_CURRENT_PROTO NDPI_PROTOCOL_MYSQL
 
-static void ndpi_int_mysql_add_connection(struct ndpi_detection_module_struct
-					  *ndpi_struct, struct ndpi_flow_struct *flow)
+#include "ndpi_api.h"
+#include "ndpi_private.h"
+
+static void ndpi_search_mysql_tcp(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
 {
-  ndpi_set_detected_protocol(ndpi_struct, flow, NDPI_PROTOCOL_MYSQL, NDPI_PROTOCOL_UNKNOWN);
-}
+  struct ndpi_packet_struct const * const packet = &ndpi_struct->packet;
 
-void ndpi_search_mysql_tcp(struct ndpi_detection_module_struct *ndpi_struct, struct ndpi_flow_struct *flow)
-{
-  struct ndpi_packet_struct *packet = &flow->packet;
-	
-  //      struct ndpi_id_struct         *src=ndpi_struct->src;
-  //      struct ndpi_id_struct         *dst=ndpi_struct->dst;
-  if(packet->tcp) {
-    if (packet->payload_packet_len > 38	//min length
-	&& get_u_int16_t(packet->payload, 0) == packet->payload_packet_len - 4	//first 3 bytes are length
-	&& get_u_int8_t(packet->payload, 2) == 0x00	//3rd byte of packet length
-	&& get_u_int8_t(packet->payload, 3) == 0x00	//packet sequence number is 0 for startup packet
-	&& get_u_int8_t(packet->payload, 5) > 0x30	//server version > 0
-	&& get_u_int8_t(packet->payload, 5) < 0x37	//server version < 7
-	&& get_u_int8_t(packet->payload, 6) == 0x2e	//dot
-	) {
-      u_int32_t a;
-      for (a = 7; a + 31 < packet->payload_packet_len; a++) {
-	if (packet->payload[a] == 0x00) {
-	  if (get_u_int8_t(packet->payload, a + 13) == 0x00	//filler byte
-	      && get_u_int64_t(packet->payload, a + 19) == 0x0ULL	//13 more
-	      && get_u_int32_t(packet->payload, a + 27) == 0x0	//filler bytes
-	      && get_u_int8_t(packet->payload, a + 31) == 0x0) {
-	    NDPI_LOG(NDPI_PROTOCOL_MYSQL, ndpi_struct, NDPI_LOG_DEBUG, "MySQL detected.\n");
-	    ndpi_int_mysql_add_connection(ndpi_struct, flow);
-	    return;
-	  }
-	  break;
-	}
+  NDPI_LOG_DBG(ndpi_struct, "search MySQL\n");
+
+  if(packet->payload_packet_len > 70 && packet->payload_packet_len < 120) {
+    u_int32_t length = (packet->payload[2] << 16) + (packet->payload[1] << 8) + packet->payload[0];
+
+    if ((u_int32_t)(packet->payload_packet_len-4) == length && 
+        packet->payload[4] == 0x0A && ((memcmp(&packet->payload[5], "5.5.5-", 6) == 0) || 
+        (packet->payload[5] > 0x33 && packet->payload[5] < 0x39)))
+    {
+      if ((memcmp(&packet->payload[packet->payload_packet_len-10], "_password", 9) == 0) ||
+          (memcmp(&packet->payload[packet->payload_packet_len-10], "_kerberos", 9) == 0) ||
+          (memcmp(&packet->payload[packet->payload_packet_len-9], "_windows", 8) == 0) ||
+          (memcmp(&packet->payload[packet->payload_packet_len-8], "_simple", 7) == 0) ||
+          (memcmp(&packet->payload[packet->payload_packet_len-8], "_gssapi", 7) == 0) ||
+          (memcmp(&packet->payload[packet->payload_packet_len-5], "_pam", 4) == 0))
+      {
+        NDPI_LOG_INFO(ndpi_struct, "found MySQL\n");
+        ndpi_set_detected_protocol(ndpi_struct, &flow->core, NDPI_PROTOCOL_MYSQL, NDPI_PROTOCOL_UNKNOWN, NDPI_CONFIDENCE_DPI);
+        return;
       }
     }
   }
 
-  NDPI_ADD_PROTOCOL_TO_BITMASK(flow->excluded_protocol_bitmask, NDPI_PROTOCOL_MYSQL);
+  NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 }
 
 
-void init_mysql_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
+void init_mysql_dissector(struct ndpi_detection_module_struct *ndpi_struct)
 {
-  ndpi_set_bitmask_protocol_detection("MySQL", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_MYSQL,
-				      ndpi_search_mysql_tcp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_TCP_WITH_PAYLOAD_WITHOUT_RETRANSMISSION,
-				      SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
-
-  *id += 1;
+  ndpi_register_dissector("MySQL", ndpi_struct,
+                     ndpi_search_mysql_tcp,
+                     NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_TCP_WITH_PAYLOAD_WITHOUT_RETRANSMISSION,
+                      DISSECTOR_LICENSE_LGPL,
+                      1, NDPI_PROTOCOL_MYSQL);
 }
-
-#endif

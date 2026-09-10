@@ -1,7 +1,7 @@
 /*
  * ndpi_win32.h
  *
- * Copyright (C) 2011-16 - ntop.org
+ * Copyright (C) 2011-26 - ntop.org
  *
  * This file is part of nDPI, an open source deep packet inspection
  * library based on the OpenDPI and PACE technology by ipoque GmbH
@@ -24,23 +24,40 @@
 #ifndef __NDPI_WIN32_H__
 #define __NDPI_WIN32_H__
 
+#undef _WIN32_WINNT
+#define _WIN32_WINNT _WIN32_WINNT_WIN8
 #include <winsock2.h>
+#include <windows.h>
 #include <ws2tcpip.h>
 #include <process.h>
 #include <io.h>
-#include <getopt.h>   /* getopt from: http://www.pwilson.net/sample.html. */
 #include <process.h>  /* for getpid() and the exec..() family */
 #include <stdint.h>
+#include <time.h>
 
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 
-#define _WS2TCPIP_H_ /* Avoid compilation problems */
-
 #define	IPVERSION	4 /* on *nix it is defined in netinet/ip.h */ 
 
-extern char* strsep(char **sp, const char *sep);
+#if defined(__MINGW32__) || defined(__MINGW64__)
+#undef gettimeofday
+#define gettimeofday mingw_gettimeofday
+#endif
+
+#ifdef _MSC_BUILD
+#define strncasecmp _strnicmp
+#define strcasecmp _stricmp
+#define strdup _strdup
+#define access _access
+#endif
+
+#ifndef F_OK
+#define F_OK 0
+#endif
+
+extern char* strsep(char **sp, char *sep);
 
 typedef unsigned char  u_char;
 typedef unsigned short u_short;
@@ -52,19 +69,16 @@ typedef uint           u_int32_t;
 typedef uint           u_int;
 typedef unsigned       __int64 u_int64_t;
 
-#define pthread_t                HANDLE
-#define pthread_mutex_t          HANDLE
-#define pthread_rwlock_t         pthread_mutex_t
-#define pthread_rwlock_init      pthread_mutex_init
-#define pthread_rwlock_wrlock    pthread_mutex_lock
-#define pthread_rwlock_rdlock    pthread_mutex_lock
-#define pthread_rwlock_unlock    pthread_mutex_unlock
-#define pthread_rwlock_destroy	 pthread_mutex_destroy
+#define timegm                          _mkgmtime
 
-#define gmtime_r(a, b)           memcpy(b, gmtime(a), sizeof(struct tm))
+#define sleep(a /* sec */)              Sleep(1000*a /* ms */)
 
-extern unsigned long waitForNextEvent(unsigned long ulDelay /* ms */);
+/* https://stackoverflow.com/questions/7993050/multiplatform-atomic-increment */
+#define __sync_fetch_and_add(a,b)       InterlockedExchangeAdd ((a), b)
 
-#define sleep(a /* sec */) waitForNextEvent(1000*a /* ms */)
+#if defined(WIN32) || defined(WIN64)
+#include <intrin.h>
+#define __builtin_popcount __popcnt
+#endif
 
 #endif /* __NDPI_WIN32_H__ */

@@ -1,11 +1,7 @@
 /*
  * mail_pop.c
  *
- * Copyright (C) 2009-2011 by ipoque GmbH
- * Copyright (C) 2011-15 - ntop.org
- *
- * This file is part of nDPI, an open source deep packet inspection
- * library based on the OpenDPI and PACE technology by ipoque GmbH
+ * Copyright (C) 2011-26 - ntop.org
  *
  * nDPI is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published by
@@ -19,14 +15,17 @@
  *
  * You should have received a copy of the GNU Lesser General Public License
  * along with nDPI.  If not, see <http://www.gnu.org/licenses/>.
- * 
+ *
  */
 
+#include "ndpi_protocol_ids.h"
 
-#include "ndpi_protocols.h"
+#define NDPI_CURRENT_PROTO NDPI_PROTOCOL_MAIL_POP
 
-#ifdef NDPI_PROTOCOL_MAIL_POP
+#include "ndpi_api.h"
+#include "ndpi_private.h"
 
+/* Bitmask flags for observed POP3 client commands */
 #define POP_BIT_AUTH		0x0001
 #define POP_BIT_APOP		0x0002
 #define POP_BIT_USER		0x0004
@@ -39,180 +38,177 @@
 #define POP_BIT_DELE		0x0200
 #define POP_BIT_STLS		0x0400
 
+static void popInitExtraPacketProcessing(struct ndpi_flow_struct *flow);
 
-static void ndpi_int_mail_pop_add_connection(struct ndpi_detection_module_struct
-					     *ndpi_struct, struct ndpi_flow_struct *flow)
-{
-  ndpi_set_detected_protocol(ndpi_struct, flow, NDPI_PROTOCOL_MAIL_POP, NDPI_PROTOCOL_UNKNOWN);
+/* **************************************** */
+
+static void pop_set_detected(struct ndpi_detection_module_struct *ndpi_struct,
+                              struct ndpi_flow_struct *flow, u_int16_t protocol) {
+  NDPI_LOG_INFO(ndpi_struct, "mail_pop identified\n");
+  ndpi_set_detected_protocol(ndpi_struct, &flow->core, protocol,
+                             NDPI_PROTOCOL_UNKNOWN, NDPI_CONFIDENCE_DPI);
 }
 
+/* **************************************** */
 
-static int ndpi_int_mail_pop_check_for_client_commands(struct ndpi_detection_module_struct
-						       *ndpi_struct, struct ndpi_flow_struct *flow)
-{
-	struct ndpi_packet_struct *packet = &flow->packet;
-	
-//  struct ndpi_id_struct         *src=ndpi_struct->src;
-//  struct ndpi_id_struct         *dst=ndpi_struct->dst;
+static int pop_check_client_command(struct ndpi_detection_module_struct *ndpi_struct,
+                                    struct ndpi_flow_struct *flow) {
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
 
-	if (packet->payload_packet_len > 4) {
-		if ((packet->payload[0] == 'A' || packet->payload[0] == 'a')
-			&& (packet->payload[1] == 'U' || packet->payload[1] == 'u')
-			&& (packet->payload[2] == 'T' || packet->payload[2] == 't')
-			&& (packet->payload[3] == 'H' || packet->payload[3] == 'h')) {
-			flow->l4.tcp.pop_command_bitmask |= POP_BIT_AUTH;
-			return 1;
-		} else if ((packet->payload[0] == 'A' || packet->payload[0] == 'a')
-				   && (packet->payload[1] == 'P' || packet->payload[1] == 'p')
-				   && (packet->payload[2] == 'O' || packet->payload[2] == 'o')
-				   && (packet->payload[3] == 'P' || packet->payload[3] == 'p')) {
-			flow->l4.tcp.pop_command_bitmask |= POP_BIT_APOP;
-			return 1;
-		} else if ((packet->payload[0] == 'U' || packet->payload[0] == 'u')
-				   && (packet->payload[1] == 'S' || packet->payload[1] == 's')
-				   && (packet->payload[2] == 'E' || packet->payload[2] == 'e')
-				   && (packet->payload[3] == 'R' || packet->payload[3] == 'r')) {
-			flow->l4.tcp.pop_command_bitmask |= POP_BIT_USER;
-			return 1;
-		} else if ((packet->payload[0] == 'P' || packet->payload[0] == 'p')
-				   && (packet->payload[1] == 'A' || packet->payload[1] == 'a')
-				   && (packet->payload[2] == 'S' || packet->payload[2] == 's')
-				   && (packet->payload[3] == 'S' || packet->payload[3] == 's')) {
-			flow->l4.tcp.pop_command_bitmask |= POP_BIT_PASS;
-			return 1;
-		} else if ((packet->payload[0] == 'C' || packet->payload[0] == 'c')
-				   && (packet->payload[1] == 'A' || packet->payload[1] == 'a')
-				   && (packet->payload[2] == 'P' || packet->payload[2] == 'p')
-				   && (packet->payload[3] == 'A' || packet->payload[3] == 'a')) {
-			flow->l4.tcp.pop_command_bitmask |= POP_BIT_CAPA;
-			return 1;
-		} else if ((packet->payload[0] == 'L' || packet->payload[0] == 'l')
-				   && (packet->payload[1] == 'I' || packet->payload[1] == 'i')
-				   && (packet->payload[2] == 'S' || packet->payload[2] == 's')
-				   && (packet->payload[3] == 'T' || packet->payload[3] == 't')) {
-			flow->l4.tcp.pop_command_bitmask |= POP_BIT_LIST;
-			return 1;
-		} else if ((packet->payload[0] == 'S' || packet->payload[0] == 's')
-				   && (packet->payload[1] == 'T' || packet->payload[1] == 't')
-				   && (packet->payload[2] == 'A' || packet->payload[2] == 'a')
-				   && (packet->payload[3] == 'T' || packet->payload[3] == 't')) {
-			flow->l4.tcp.pop_command_bitmask |= POP_BIT_STAT;
-			return 1;
-		} else if ((packet->payload[0] == 'U' || packet->payload[0] == 'u')
-				   && (packet->payload[1] == 'I' || packet->payload[1] == 'i')
-				   && (packet->payload[2] == 'D' || packet->payload[2] == 'd')
-				   && (packet->payload[3] == 'L' || packet->payload[3] == 'l')) {
-			flow->l4.tcp.pop_command_bitmask |= POP_BIT_UIDL;
-			return 1;
-		} else if ((packet->payload[0] == 'R' || packet->payload[0] == 'r')
-				   && (packet->payload[1] == 'E' || packet->payload[1] == 'e')
-				   && (packet->payload[2] == 'T' || packet->payload[2] == 't')
-				   && (packet->payload[3] == 'R' || packet->payload[3] == 'r')) {
-			flow->l4.tcp.pop_command_bitmask |= POP_BIT_RETR;
-			return 1;
-		} else if ((packet->payload[0] == 'D' || packet->payload[0] == 'd')
-				   && (packet->payload[1] == 'E' || packet->payload[1] == 'e')
-				   && (packet->payload[2] == 'L' || packet->payload[2] == 'l')
-				   && (packet->payload[3] == 'E' || packet->payload[3] == 'e')) {
-			flow->l4.tcp.pop_command_bitmask |= POP_BIT_DELE;
-			return 1;
-		} else if ((packet->payload[0] == 'S' || packet->payload[0] == 's')
-				   && (packet->payload[1] == 'T' || packet->payload[1] == 't')
-				   && (packet->payload[2] == 'L' || packet->payload[2] == 'l')
-				   && (packet->payload[3] == 'S' || packet->payload[3] == 's')) {
-			flow->l4.tcp.pop_command_bitmask |= POP_BIT_STLS;
-			return 1;
-		}
-	}
-	return 0;
+  if(packet->payload_packet_len <= 4)
+    return 0;
+
+  if(ndpi_memcasecmp(packet->payload, "AUTH", 4) == 0) {
+    flow->metadata.l4.tcp.pop_command_bitmask |= POP_BIT_AUTH;
+  } else if(ndpi_memcasecmp(packet->payload, "APOP", 4) == 0) {
+    flow->metadata.l4.tcp.pop_command_bitmask |= POP_BIT_APOP;
+  } else if(ndpi_memcasecmp(packet->payload, "USER", 4) == 0) {
+    char buf[64];
+
+    ndpi_user_pwd_payload_copy((u_int8_t *)flow->metadata.l4.tcp.ftp_imap_pop_smtp.username,
+                                sizeof(flow->metadata.l4.tcp.ftp_imap_pop_smtp.username),
+                                5, packet->payload, packet->payload_packet_len);
+    snprintf(buf, sizeof(buf), "Found username (%s)",
+             flow->metadata.l4.tcp.ftp_imap_pop_smtp.username);
+    ndpi_set_risk(ndpi_struct, &flow->core, NDPI_CLEAR_TEXT_CREDENTIALS, buf);
+    flow->metadata.l4.tcp.pop_command_bitmask |= POP_BIT_USER;
+  } else if(ndpi_memcasecmp(packet->payload, "PASS", 4) == 0) {
+    ndpi_user_pwd_payload_copy((u_int8_t *)flow->metadata.l4.tcp.ftp_imap_pop_smtp.password,
+                                sizeof(flow->metadata.l4.tcp.ftp_imap_pop_smtp.password),
+                                5, packet->payload, packet->payload_packet_len);
+    ndpi_set_risk(ndpi_struct, &flow->core, NDPI_CLEAR_TEXT_CREDENTIALS, "Found password");
+    flow->metadata.l4.tcp.pop_command_bitmask |= POP_BIT_PASS;
+  } else if(ndpi_memcasecmp(packet->payload, "CAPA", 4) == 0) {
+    flow->metadata.l4.tcp.pop_command_bitmask |= POP_BIT_CAPA;
+  } else if(ndpi_memcasecmp(packet->payload, "LIST", 4) == 0) {
+    flow->metadata.l4.tcp.pop_command_bitmask |= POP_BIT_LIST;
+  } else if(ndpi_memcasecmp(packet->payload, "STAT", 4) == 0) {
+    flow->metadata.l4.tcp.pop_command_bitmask |= POP_BIT_STAT;
+  } else if(ndpi_memcasecmp(packet->payload, "UIDL", 4) == 0) {
+    flow->metadata.l4.tcp.pop_command_bitmask |= POP_BIT_UIDL;
+  } else if(ndpi_memcasecmp(packet->payload, "RETR", 4) == 0) {
+    flow->metadata.l4.tcp.pop_command_bitmask |= POP_BIT_RETR;
+  } else if(ndpi_memcasecmp(packet->payload, "DELE", 4) == 0) {
+    flow->metadata.l4.tcp.pop_command_bitmask |= POP_BIT_DELE;
+  } else if(ndpi_memcasecmp(packet->payload, "STLS", 4) == 0) {
+    flow->metadata.l4.tcp.pop_command_bitmask |= POP_BIT_STLS;
+    flow->metadata.l4.tcp.mail_imap_starttls = 1;
+  } else {
+    return 0;
+  }
+
+  return 1;
 }
 
+/* **************************************** */
 
+static void ndpi_search_mail_pop_tcp(struct ndpi_detection_module_struct *ndpi_struct,
+                                     struct ndpi_flow_struct *flow) {
+  struct ndpi_packet_struct *packet = &ndpi_struct->packet;
+  u_int8_t bit_count = 0;
 
-void ndpi_search_mail_pop_tcp(struct ndpi_detection_module_struct
-								*ndpi_struct, struct ndpi_flow_struct *flow)
-{
-	struct ndpi_packet_struct *packet = &flow->packet;
-	
-//  struct ndpi_id_struct         *src=ndpi_struct->src;
-//  struct ndpi_id_struct         *dst=ndpi_struct->dst;
-	u_int8_t a = 0;
-	u_int8_t bit_count = 0;
+  NDPI_LOG_DBG(ndpi_struct, "search mail_pop\n");
 
-	NDPI_LOG(NDPI_PROTOCOL_MAIL_POP, ndpi_struct, NDPI_LOG_DEBUG, "search mail_pop\n");
+  if(packet->payload_packet_len > 3 &&
+     ndpi_memcasecmp(packet->payload, "+OK", 3) == 0) {
+    /* Server positive response */
+    flow->metadata.l4.tcp.mail_pop_stage += 1;
+    if(flow->metadata.l4.tcp.mail_imap_starttls == 1) {
+      NDPI_LOG_DBG2(ndpi_struct, "starttls detected\n");
+      pop_set_detected(ndpi_struct, flow, NDPI_PROTOCOL_MAIL_POPS);
+      if(ndpi_struct->cfg.pop_opportunistic_tls_enabled) {
+        NDPI_LOG_DBG(ndpi_struct, "Switching to [%d/%d]\n",
+                     flow->core.detected_protocol_stack[0], flow->core.detected_protocol_stack[1]);
+        switch_extra_dissection_to_tls(ndpi_struct, flow);
+        return;
+      }
+    }
+  } else if(packet->payload_packet_len > 4 &&
+            ndpi_memcasecmp(packet->payload, "-ERR", 4) == 0) {
+    /* Server error response */
+    flow->metadata.l4.tcp.mail_pop_stage += 1;
+    if(flow->metadata.l4.tcp.mail_imap_starttls == 1)
+      flow->metadata.l4.tcp.mail_imap_starttls = 0;
+  } else if(!pop_check_client_command(ndpi_struct, flow)) {
+    goto maybe_split_pop;
+  }
 
+  if(packet->payload_packet_len > 2 &&
+     ntohs(get_u_int16_t(packet->payload, packet->payload_packet_len - 2)) == 0x0d0a) {
+    if(flow->metadata.l4.tcp.pop_command_bitmask != 0) {
+      u_int16_t mask = flow->metadata.l4.tcp.pop_command_bitmask;
+      while(mask) {
+        bit_count += mask & 1;
+        mask >>= 1;
+      }
+    }
 
+    NDPI_LOG_DBG2(ndpi_struct,
+                  "mail_pop +OK/-ERR responses: %u, unique commands: %u\n",
+                  flow->metadata.l4.tcp.mail_pop_stage, bit_count);
 
-	if ((packet->payload_packet_len > 3
-		 && (packet->payload[0] == '+' && (packet->payload[1] == 'O' || packet->payload[1] == 'o')
-			 && (packet->payload[2] == 'K' || packet->payload[2] == 'k')))
-		|| (packet->payload_packet_len > 4
-			&& (packet->payload[0] == '-' && (packet->payload[1] == 'E' || packet->payload[1] == 'e')
-				&& (packet->payload[2] == 'R' || packet->payload[2] == 'r')
-				&& (packet->payload[3] == 'R' || packet->payload[3] == 'r')))) {
-		// +OK or -ERR seen
-		flow->l4.tcp.mail_pop_stage += 1;
-	} else if (!ndpi_int_mail_pop_check_for_client_commands(ndpi_struct, flow)) {
-		goto maybe_split_pop;
-	}
+    if((bit_count + flow->metadata.l4.tcp.mail_pop_stage) >= 3) {
+      if(flow->metadata.l4.tcp.mail_pop_stage > 0) {
+        if(flow->metadata.l4.tcp.ftp_imap_pop_smtp.password[0] != '\0' ||
+           flow->metadata.l4.tcp.mail_pop_stage >= 3) {
+          pop_set_detected(ndpi_struct, flow, NDPI_PROTOCOL_MAIL_POP);
+          if(flow->metadata.l4.tcp.ftp_imap_pop_smtp.password[0] == '\0')
+            popInitExtraPacketProcessing(flow);
+        }
+      }
+    }
+    return;
+  }
 
-	if (packet->payload_packet_len > 2 && ntohs(get_u_int16_t(packet->payload, packet->payload_packet_len - 2)) == 0x0d0a) {
+  /* Packet has no CRLF terminator — first fragment of a split packet */
+  NDPI_LOG_DBG2(ndpi_struct, "mail_pop command without line ending -> skip\n");
+  return;
 
-		// count the bits set in the bitmask
-		if (flow->l4.tcp.pop_command_bitmask != 0) {
-			for (a = 0; a < 16; a++) {
-				bit_count += (flow->l4.tcp.pop_command_bitmask >> a) & 0x01;
-			}
-		}
+ maybe_split_pop:
+  if(((packet->payload_packet_len > 2 &&
+       ntohs(get_u_int16_t(packet->payload, packet->payload_packet_len - 2)) == 0x0d0a) ||
+      flow->metadata.l4.tcp.pop_command_bitmask != 0 ||
+      flow->metadata.l4.tcp.mail_pop_stage != 0) &&
+     flow->core.packet_counter < 12) {
+    NDPI_LOG_DBG2(ndpi_struct, "maybe part of split mail_pop packet -> skip\n");
+    return;
+  }
 
-		NDPI_LOG(NDPI_PROTOCOL_MAIL_POP, ndpi_struct, NDPI_LOG_DEBUG,
-				"mail_pop +OK/-ERR responses: %u, unique commands: %u\n", flow->l4.tcp.mail_pop_stage, bit_count);
-
-		if ((bit_count + flow->l4.tcp.mail_pop_stage) >= 3) {
-			if (flow->l4.tcp.mail_pop_stage > 0) {
-				NDPI_LOG(NDPI_PROTOCOL_MAIL_POP, ndpi_struct, NDPI_LOG_DEBUG, "mail_pop identified\n");
-				ndpi_int_mail_pop_add_connection(ndpi_struct, flow);
-				return;
-			} else {
-				return;
-			}
-		} else {
-			return;
-		}
-
-	} else {
-		// first part of a split packet
-		NDPI_LOG(NDPI_PROTOCOL_MAIL_POP, ndpi_struct, NDPI_LOG_DEBUG,
-				"mail_pop command without line ending -> skip\n");
-		return;
-	}
-
-
-  maybe_split_pop:
-
-	if (((packet->payload_packet_len > 2 && ntohs(get_u_int16_t(packet->payload, packet->payload_packet_len - 2)) == 0x0d0a)
-		 || flow->l4.tcp.pop_command_bitmask != 0 || flow->l4.tcp.mail_pop_stage != 0) && flow->packet_counter < 12) {
-		// maybe part of a split pop packet
-		NDPI_LOG(NDPI_PROTOCOL_MAIL_POP, ndpi_struct, NDPI_LOG_DEBUG,
-				"maybe part of split mail_pop packet -> skip\n");
-		return;
-	}
-
-	NDPI_LOG(NDPI_PROTOCOL_MAIL_POP, ndpi_struct, NDPI_LOG_DEBUG, "exclude mail_pop\n");
-	NDPI_ADD_PROTOCOL_TO_BITMASK(flow->excluded_protocol_bitmask, NDPI_PROTOCOL_MAIL_POP);
+  NDPI_EXCLUDE_DISSECTOR(ndpi_struct, flow);
 }
 
+/* **************************************** */
 
-void init_mail_pop_dissector(struct ndpi_detection_module_struct *ndpi_struct, u_int32_t *id, NDPI_PROTOCOL_BITMASK *detection_bitmask)
-{
-  ndpi_set_bitmask_protocol_detection("MAIL_POP", ndpi_struct, detection_bitmask, *id,
-				      NDPI_PROTOCOL_MAIL_POP,
-				      ndpi_search_mail_pop_tcp,
-				      NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_TCP_WITH_PAYLOAD_WITHOUT_RETRANSMISSION,
-				      SAVE_DETECTION_BITMASK_AS_UNKNOWN,
-				      ADD_TO_DETECTION_BITMASK);
+int ndpi_extra_search_mail_pop_tcp(struct ndpi_detection_module_struct *ndpi_struct,
+                                   struct ndpi_flow_struct *flow) {
+  int rc;
 
-  *id += 1;
-}
+  ndpi_search_mail_pop_tcp(ndpi_struct, flow);
+  rc = (flow->metadata.l4.tcp.ftp_imap_pop_smtp.password[0] == '\0') ? 1 : 0;
 
+#ifdef POP_DEBUG
+  printf("**** %s() [rc: %d]\n", __FUNCTION__, rc);
 #endif
+
+  return(rc);
+}
+
+/* **************************************** */
+
+static void popInitExtraPacketProcessing(struct ndpi_flow_struct *flow) {
+#ifdef POP_DEBUG
+  printf("**** %s()\n", __FUNCTION__);
+#endif
+  flow->core.max_extra_packets_to_check = 7;
+  flow->core.extra_packets_func = ndpi_extra_search_mail_pop_tcp;
+}
+
+/* **************************************** */
+
+void init_mail_pop_dissector(struct ndpi_detection_module_struct *ndpi_struct) {
+  ndpi_register_dissector("MAIL_POP", ndpi_struct,
+                          ndpi_search_mail_pop_tcp,
+                          NDPI_SELECTION_BITMASK_PROTOCOL_V4_V6_TCP_WITH_PAYLOAD_WITHOUT_RETRANSMISSION,
+                          DISSECTOR_LICENSE_LGPL,
+                          1, NDPI_PROTOCOL_MAIL_POP);
+}
