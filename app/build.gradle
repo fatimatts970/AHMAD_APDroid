@@ -90,7 +90,7 @@ android {
     }
 
     sourceSets {
-        main.java.srcDirs += '../submodules/MaxMind-DB-Reader-java/src/main/java'
+        main.java.srcDirs += 'src/main/jni/submodules/MaxMind-DB-Reader-java/src/main/java'
 
         // Note: must use "setRoot" to make this a per-flavor setting
         standard.setRoot('../submodules/PCAPdroid-ushark-bin/release')
